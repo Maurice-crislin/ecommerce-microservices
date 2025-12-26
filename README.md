@@ -1,0 +1,2 @@
+E-commerce Microservices Platform
+A modular, scalable E-commerce Microservices Platform designed to handle the core functionalities of an online store. The platform is built using Spring Boot, with MySQL as the primary database, follows a microservice-oriented architecture to enable independent deployment and maintenance of each service, is containerized with Docker and orchestrated using Kubernetes, and integrates Apache Kafka for asynchronous communication between services.
