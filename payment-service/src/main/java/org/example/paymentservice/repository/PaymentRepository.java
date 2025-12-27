@@ -1,4 +1,10 @@
 package org.example.paymentservice.repository;
 
-public class PaymentRepository {
+import org.example.paymentservice.model.Payment;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface PaymentRepository extends JpaRepository<Payment, Long> {
+    Optional<Payment> findPaymentByPaymentNo(String paymentNo);
 }
