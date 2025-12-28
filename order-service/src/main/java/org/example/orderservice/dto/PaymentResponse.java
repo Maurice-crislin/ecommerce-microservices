@@ -1,8 +1,9 @@
-package org.example.paymentservice.dto;
+package org.example.orderservice.dto;
+
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
-import org.example.paymentservice.model.PaymentStatus;
+import org.example.orderservice.model.PaymentStatus;
 
 @Data
 @AllArgsConstructor

@@ -1,0 +1,15 @@
+package org.example.orderservice.dto;
+
+import lombok.Getter;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+
+@Getter
+public class DeductStockRequest {
+    @NotNull
+    private Long productCode;
+    @Min(1)
+    @NotNull
+    private Integer quantity;
+}
+
