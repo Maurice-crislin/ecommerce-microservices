@@ -41,7 +41,7 @@ public class InventoryControllerTest {
     @Test
     void deductStock_badRequest() throws Exception {
         doThrow(new IllegalArgumentException("out of stock"))
-                .when(inventoryService).deductStock(1001L, 10);
+                .when(inventoryService).deductStockDirectly(1001L, 10);
 
         mockMvc.perform(post("/inventories/deduct")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -57,7 +57,7 @@ public class InventoryControllerTest {
     @Test
     void deductStock_conflict() throws Exception {
         doThrow(new OptimisticLockException())
-                .when(inventoryService).deductStock(1001L, 1);
+                .when(inventoryService).deductStockDirectly(1001L, 1);
 
         mockMvc.perform(post("/inventories/deduct")
                         .contentType(MediaType.APPLICATION_JSON)

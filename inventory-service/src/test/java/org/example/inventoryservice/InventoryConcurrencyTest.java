@@ -34,7 +34,7 @@ class InventoryConcurrencyTest {
 
         Runnable task = () -> {
             try {
-                inventoryService.deductStock(1001L, 6);
+                inventoryService.deductStockDirectly(1001L, 6);
             } catch (Exception ignored) {
             } finally {
                 latch.countDown();

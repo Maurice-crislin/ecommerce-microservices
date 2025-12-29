@@ -5,7 +5,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
 @Getter
-public class DeductStockRequest {
+public class StockRequest {
     @NotNull
     private Long productCode;
     @Min(1)
