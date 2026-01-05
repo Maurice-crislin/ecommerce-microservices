@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 @Table(
         name="refunds",
         uniqueConstraints = {
+                @UniqueConstraint(columnNames = "refund_no"),
                 @UniqueConstraint(columnNames = "payment_no")
         }
 )
@@ -20,10 +21,10 @@ public class Refund {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "payment_no", nullable = false, unique = true)
+    @Column(name = "refund_no", nullable = false, unique = true)
     private String refundNo;
 
-    @Column(nullable = false)
+    @Column(name = "payment_no", nullable = false, unique = true)
     private String paymentNo;
 
     @Column(nullable = false)

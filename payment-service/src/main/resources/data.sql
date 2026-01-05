@@ -1,6 +1,0 @@
-INSERT INTO payments (order_id, payment_no, amount, status, provider, provider_tx_id, created_at, updated_at) VALUES
-                                                                                                                  (10001, 'a1b2c3d4-e5f6-7g8h-9i10-111213141516', 199.99, 'PAID', 'Stripe', 'stripe_tx_001', NOW(), NOW()),
-                                                                                                                  (10002, 'b2c3d4e5-f6g7-8h9i-1011-121314151617', 49.50, 'FAILED', 'PayPal', 'paypal_tx_002', NOW(), NOW()),
-                                                                                                                  (10003, 'c3d4e5f6-g7h8-9i10-1112-131415161718', 299.00, 'PENDING', 'AliPay', 'alipay_tx_003', NOW(), NOW()),
-                                                                                                                  (10004, 'd4e5f6g7-h8i9-1011-1213-141516171819', 75.25, 'CANCELED', 'Stripe', NULL, NOW(), NOW()),
-                                                                                                                  (10005, 'e5f6g7h8-i9j10-1112-1314-151617181920', 150.75, 'PAID', 'PayPal', 'paypal_tx_004', NOW(), NOW());

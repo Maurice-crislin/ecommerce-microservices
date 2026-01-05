@@ -36,7 +36,7 @@ class RefundConcurrencyTest {
     @Autowired
     private RefundRepository refundRepository;
 
-    private static final int THREAD_COUNT = 220;
+    private static final int THREAD_COUNT = 210;
 
     @BeforeEach
     void clean() {

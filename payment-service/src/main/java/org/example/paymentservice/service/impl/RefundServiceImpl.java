@@ -41,6 +41,7 @@ public class RefundServiceImpl implements RefundService {
             Refund refund = new Refund();
             refund.setRefundNo(UUID.randomUUID().toString());
             refund.setPaymentNo(payment.getPaymentNo());
+            refund.setOrderId(payment.getOrderId());
             refund.setAmount(payment.getAmount());
             refund.setStatus(RefundStatus.PROCESSING);
             refund.setProvider(payment.getProvider());
