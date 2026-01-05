@@ -21,12 +21,30 @@ public class Inventory {
     @Version
     /* optimistic locking*/
     private  Long version;
+
+    private void validateState(){
+        if(this.availableStock < 0 || this.lockedStock < 0 || this.soldStock < 0){
+            throw new IllegalStateException(
+                    "Invalid inventory state: available=" + availableStock
+                            + ", locked=" + lockedStock
+                            + ", sold=" + soldStock
+            );
+        }
+    }
+    @PrePersist
+    @PreUpdate
+    private void prePersistUpdate(){
+        // always check inventory
+        validateState();
+    }
     public Inventory(Long productCode, Integer availableStock) {
         this.productCode = productCode;
         this.availableStock = availableStock;
         this.lockedStock = 0;
         this.soldStock = 0;
     }
+
+
     public void deductStock(Integer quantity) {
         if ( quantity == null || quantity <= 0) {
             throw new IllegalArgumentException("quantity must be greater than zero");

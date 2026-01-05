@@ -2,12 +2,15 @@ package org.example.orderservice.entity;
 
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+import org.common.order.enums.OrderStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
 @Entity
+@Data
 @Table(name="orders")
 public class Order {
     @Id

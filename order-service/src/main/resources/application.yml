@@ -1,0 +1,7 @@
+services:
+  product:
+    base-url: http://product-service:8080
+  inventory:
+    base-url: http://inventory-service:8080
+  payment:
+    base-url: http://payment-service:8080

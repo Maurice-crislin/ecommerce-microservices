@@ -2,7 +2,7 @@ package org.example.paymentservice.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
-import org.example.paymentservice.model.PaymentStatus;
+import org.common.payment.enums.PaymentStatus;
 
 @Data
 @AllArgsConstructor

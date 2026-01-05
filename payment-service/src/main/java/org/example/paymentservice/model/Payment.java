@@ -4,11 +4,16 @@ import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import lombok.Data;
+import org.common.payment.enums.PaymentStatus;
 
 
 @Data
 @Entity
-@Table(name="payments")
+@Table(name="payments",
+        uniqueConstraints = {
+        @UniqueConstraint(columnNames = "order_id")
+        }
+)
 public class Payment {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

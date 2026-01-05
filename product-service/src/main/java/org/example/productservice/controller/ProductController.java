@@ -1,7 +1,9 @@
 package org.example.productservice.controller;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.example.productservice.dto.BatchProductPriceRequest;
+import org.example.productservice.dto.BatchProductPriceResponse;
 import org.example.productservice.dto.ProductPriceResponse;
 import org.example.productservice.entity.Product;
 import org.example.productservice.service.ProductService;
@@ -39,8 +41,9 @@ public class ProductController {
      *   "codes": [10010001, 10010002, 10010003]
      * }
      * @return
-     * [
-     *   {
+     * {
+     *    orderable: true,
+     *    products : [{
      *     "productCode": 10010001,
      *     "price": 199.99,
      *     "status": "ACTIVE"
@@ -49,15 +52,18 @@ public class ProductController {
      *     "productCode": 10010002,
      *     "price": 299.99,
      *     "status": "ACTIVE"
-     *   }
-     * ]
+     *   }],
+     *   missingProductCodes: [10010003]
+     * }
      */
     @PostMapping("/batch")
-    public ResponseEntity<List<ProductPriceResponse>> getAllProductPrices(@RequestBody BatchProductPriceRequest request) {
+    public ResponseEntity<BatchProductPriceResponse> getAllProductPrices(@RequestBody @Valid BatchProductPriceRequest request) {
         List<Long> productCodes = request.getProductCodes();
-        if(productCodes == null || productCodes.isEmpty()){
-            return ResponseEntity.badRequest().body(Collections.emptyList());
+        if (request.getProductCodes() == null || request.getProductCodes().isEmpty()) {
+            BatchProductPriceResponse response =
+                    new BatchProductPriceResponse(false,Collections.emptyList(),Collections.emptyList());
+            return ResponseEntity.badRequest().body(response);
         }
-        return ResponseEntity.ok(productService.getProductPrices(productCodes));
+        return ResponseEntity.ok(productService.getBatchProductPrices(productCodes));
     }
 }
