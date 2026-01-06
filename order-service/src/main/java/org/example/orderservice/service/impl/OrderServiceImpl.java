@@ -8,6 +8,7 @@ import org.common.payment.dto.PaymentRequest;
 import org.common.payment.enums.PaymentStatus;
 import org.common.payment.dto.PaymentResponse;
 import org.common.product.dto.BatchProductPriceRequest;
+import org.common.product.dto.BatchProductPriceResponse;
 import org.common.product.dto.ProductPriceResponse;
 import org.example.orderservice.OrderRepository.OrderRepository;
 import org.example.orderservice.client.InventoryClient;
@@ -50,7 +51,7 @@ public class OrderServiceImpl implements OrderService {
 
         // 1.batch check price and valid
         List<Long> productCodes = request.getProductRequests().stream().map(StockRequest::getProductCode).toList();
-        org.common.product.dto.BatchProductPriceResponse batchProductPriceResponse = productClient.getBatchPrice( new BatchProductPriceRequest(productCodes));
+        BatchProductPriceResponse batchProductPriceResponse = productClient.getBatchPrice( new BatchProductPriceRequest(productCodes));
 
         if (!batchProductPriceResponse.isAllProductsOrderable()) {
             throw new IllegalStateException("Some products are not orderable");
