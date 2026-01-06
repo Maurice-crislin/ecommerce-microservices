@@ -17,7 +17,7 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 public class RefundAsyncProcessorImpl implements RefundAsyncProcessor {
     private final RefundRepository refundRepository;
-    private final RefundStatusProducer RefundStatusProducer;
+    private final RefundStatusProducer refundStatusProducer;
     @Async
     @Transactional
     public void processRefundAsync(String refundNo) {
@@ -29,18 +29,21 @@ public class RefundAsyncProcessorImpl implements RefundAsyncProcessor {
                         refund.setStatus(RefundStatus.SUCCESS);
                         refund.setProviderRefundId(UUID.randomUUID().toString());
                         refundRepository.save(refund);
-                        RefundStatusProducer.sendRefundSuccess(refund);
+
+                        refundStatusProducer.sendRefundSuccess(refund);
                     } else {
                         refund.setStatus(RefundStatus.FAILED);
                         refundRepository.save(refund);
-                        RefundStatusProducer.sendRefundFailure(refund);
+
+                        refundStatusProducer.sendRefundFailure(refund);
                     }
 
                 })
                 .exceptionally(e->{
                     refund.setStatus(RefundStatus.FAILED);
                     refundRepository.save(refund);
-                    RefundStatusProducer.sendRefundFailure(refund);
+
+                    refundStatusProducer.sendRefundFailure(refund);
                     return  null;
                 });
     }
