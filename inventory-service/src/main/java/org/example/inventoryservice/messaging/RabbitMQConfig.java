@@ -5,8 +5,10 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,14 +22,6 @@ public class RabbitMQConfig {
     public static final String INVENTORY_UNLOCK_EXCHANGE = "inventory_unlock_exchange";
     public static final String INVENTORY_UNLOCK_QUEUE = "inventory_unlock_queue";
     public static final String INVENTORY_UNLOCK_ROUTING_KEY = "inventory_unlock_routing_key";
-
-
-    @Bean
-    public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory, ObjectMapper objectMapper) {
-        RabbitTemplate template = new RabbitTemplate(connectionFactory);
-        template.setMessageConverter(new Jackson2JsonMessageConverter(objectMapper));
-        return template;
-    }
 
 
     @Bean
@@ -65,5 +59,50 @@ public class RabbitMQConfig {
                 .to(inventoryConfirmExchange())
                 .with(INVENTORY_CONFIRM_ROUTING_KEY);
     }
+
+
+    // ======================
+    // RabbitTemplate (Producer)
+    // ======================
+    @Bean
+    public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory) {
+        RabbitTemplate template = new RabbitTemplate(connectionFactory);
+
+        // create converter
+        Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
+
+        // create TypeMapper and setTrustedPackages
+        DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+        typeMapper.setTrustedPackages("org.common");
+
+        converter.setJavaTypeMapper(typeMapper);
+        template.setMessageConverter(converter);
+
+        return template;
+    }
+
+    // ======================
+    // RabbitListener (Consumer)
+    // ======================
+    @Bean
+    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            ConnectionFactory connectionFactory
+    ) {
+        Jackson2JsonMessageConverter jacksonMessageConverter = new Jackson2JsonMessageConverter();
+
+        SimpleRabbitListenerContainerFactory factory =
+                new SimpleRabbitListenerContainerFactory();
+
+        factory.setConnectionFactory(connectionFactory);
+
+        // 🔥 关键：给 Listener 指定 Jackson Converter
+        factory.setMessageConverter(jacksonMessageConverter);
+
+        // 可选但推荐
+        factory.setDefaultRequeueRejected(false);
+
+        return factory;
+    }
+
 }
 

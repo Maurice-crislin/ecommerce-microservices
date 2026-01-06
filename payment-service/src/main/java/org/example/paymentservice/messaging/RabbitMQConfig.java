@@ -91,9 +91,9 @@ public class RabbitMQConfig {
 
         Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
 
-        // 创建 TypeMapper 并设置受信包
+        // create TypeMapper and setTrustedPackages
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
-        typeMapper.setTrustedPackages("org.example.paymentservice.messaging");
+        typeMapper.setTrustedPackages("org.common.payment.message");
         converter.setJavaTypeMapper(typeMapper);
 
         template.setMessageConverter(converter);

@@ -21,7 +21,7 @@ public class InventoryIdempotencyExecutor {
             inventoryOperationService.getOrStartOperation(orderId, operationType);
         } catch (DataIntegrityViolationException e) {
 
-            InventoryOperation inventoryOperation = inventoryOperationService.getOperationByOrderIdAndOperationType(orderId,OperationType.LOCK);
+            InventoryOperation inventoryOperation = inventoryOperationService.getOperationByOrderIdAndOperationType(orderId,operationType);
 
             if(inventoryOperation.getOperationStatus() == OperationStatus.FAILED){
                 throw new IllegalStateException("Previous operation failed for order " + orderId);

@@ -42,6 +42,8 @@ public class InventoryOperationServiceImpl implements InventoryOperationService 
                 .findByOrderIdAndOperationType(orderId,operationType)
                 .orElseThrow(()-> new IllegalArgumentException("Operation not found"));
         inventoryOperation.markSuccess();
+        // must save now
+        inventoryOperationRepository.saveAndFlush(inventoryOperation);
     }
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(Long orderId, OperationType operationType){
@@ -49,5 +51,7 @@ public class InventoryOperationServiceImpl implements InventoryOperationService 
                 .findByOrderIdAndOperationType(orderId,operationType)
                 .orElseThrow(()-> new IllegalArgumentException("Operation not found"));
         inventoryOperation.markFailed();
+        // must save now
+        inventoryOperationRepository.saveAndFlush(inventoryOperation);
     }
 }
