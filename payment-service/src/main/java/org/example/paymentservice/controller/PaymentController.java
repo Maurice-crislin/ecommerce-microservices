@@ -33,4 +33,12 @@ public class PaymentController {
                 new RefundResponse(refundNo, RefundStatus.PROCESSING, "Refund request accepted")
         );
     }
+    // GET /payment/refund/check/{refundNo}
+    @GetMapping("/refund/check/{refundNo}")
+    public ResponseEntity<RefundResponse> refundCheck(@PathVariable String refundNo){
+        RefundStatus refundStatus = refundService.checkRefundStatus(refundNo);
+        return  ResponseEntity.accepted().body(
+                new RefundResponse(refundNo, refundStatus, "")
+        );
+    }
 }

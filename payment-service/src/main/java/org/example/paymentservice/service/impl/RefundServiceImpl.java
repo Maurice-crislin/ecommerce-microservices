@@ -3,6 +3,7 @@ package org.example.paymentservice.service.impl;
 import lombok.RequiredArgsConstructor;
 import org.common.payment.enums.PaymentStatus;
 import org.example.paymentservice.exception.RefundErrorException;
+import org.example.paymentservice.exception.RefundNotFoundException;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.Refund;
 import org.common.payment.enums.RefundStatus;
@@ -56,5 +57,12 @@ public class RefundServiceImpl implements RefundService {
             return refundRepository.findByPaymentNo(payment.getPaymentNo()).orElseThrow().getRefundNo();
         }
 
+    }
+
+    @Override
+    public RefundStatus checkRefundStatus(String refundNo) {
+        return refundRepository.findByPaymentNo(refundNo)
+                .orElseThrow( () -> new RefundNotFoundException("refund not exists",refundNo))
+                .getStatus();
     }
 }
