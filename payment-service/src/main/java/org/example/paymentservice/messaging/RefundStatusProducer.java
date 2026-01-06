@@ -1,6 +1,7 @@
 package org.example.paymentservice.messaging;
 
 import lombok.RequiredArgsConstructor;
+import org.common.payment.message.RefundStatusMessage;
 import org.example.paymentservice.model.Refund;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;

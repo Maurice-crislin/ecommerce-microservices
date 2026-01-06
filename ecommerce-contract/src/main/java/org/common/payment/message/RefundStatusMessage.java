@@ -1,11 +1,12 @@
-package org.example.paymentservice.messaging;
+package org.common.payment.message;
 
-import lombok.NonNull;
-import java.io.Serializable;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.NonNull;
 import org.common.payment.enums.RefundStatus;
+
+import java.io.Serializable;
 
 
 @Data

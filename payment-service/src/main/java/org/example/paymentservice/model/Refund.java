@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
         name="refunds",
         uniqueConstraints = {
                 @UniqueConstraint(columnNames = "refund_no"),
-                @UniqueConstraint(columnNames = "payment_no")
+                @UniqueConstraint(columnNames = "payment_no"),
+                // @UniqueConstraint(columnNames = {"order_id","payment_no","refund_no"})
         }
 )
 public class Refund {
@@ -24,10 +25,10 @@ public class Refund {
     @Column(name = "refund_no", nullable = false, unique = true)
     private String refundNo;
 
-    @Column(name = "payment_no", nullable = false, unique = true)
+    @Column(name = "payment_no", nullable = false)
     private String paymentNo;
 
-    @Column(nullable = false)
+    @Column(name = "order_id",nullable = false)
     private Long orderId;
 
 

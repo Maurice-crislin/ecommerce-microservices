@@ -3,16 +3,15 @@ package org.example.paymentservice;
 import org.common.payment.dto.RefundResponse;
 import org.common.payment.enums.PaymentStatus;
 import org.common.payment.message.PaymentStatusMessage;
+import org.common.payment.message.RefundStatusMessage;
 import org.example.paymentservice.controller.PaymentController;
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.dto.PaymentResponse;
 import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.model.Refund;
 import org.common.payment.enums.RefundStatus;
-import org.example.paymentservice.messaging.RefundStatusMessage;
 import org.example.paymentservice.repository.PaymentRepository;
 import org.example.paymentservice.repository.RefundRepository;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -23,7 +22,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -53,7 +51,7 @@ public class PaymentRefundIntegrationTest {
         testRabbitTemplate = new RabbitTemplate(rabbitTemplate.getConnectionFactory());
         Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
-        typeMapper.setTrustedPackages("org.example.paymentservice.messaging");
+        typeMapper.setTrustedPackages("org.common.payment.message");
         converter.setJavaTypeMapper(typeMapper);
         testRabbitTemplate.setMessageConverter(converter);
 
