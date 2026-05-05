@@ -15,7 +15,8 @@ public class LogoutServiceImpl implements LogoutService {
     private final TokenService tokenService;
     private final JwtValidator jwtValidator;
     private final RefreshTokenRepository refreshTokenRepository;
-    
+
+    // 目前双token可以做到精细控制退出哪个设备
     @Override
     public void logout(String jwtToken, String refreshToken) {
         // 验证 JWT 有效

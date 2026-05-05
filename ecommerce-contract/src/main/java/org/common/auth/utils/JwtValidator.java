@@ -26,6 +26,9 @@ public class JwtValidator {
      * 如果无效直接抛出异常
      */
     public Long validateAndGetUserId(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("token must not be empty");
+        }
         try {
             Claims claims = Jwts.parserBuilder()
                     .setSigningKey(jwtKey)
@@ -35,9 +38,9 @@ public class JwtValidator {
             String userIdStr = claims.getSubject();
             return Long.valueOf(userIdStr);
         } catch (JwtException e) {
-            throw new IllegalArgumentException("Invalid token: " + e.getMessage());
+            throw new JwtException("Invalid token: " + e.getMessage());
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid userId in token");
+            throw new JwtException("Invalid userId in token");
         }
     }
 
@@ -45,6 +48,9 @@ public class JwtValidator {
      * 仅验证 JWT 是否有效（签名 + 过期时间）
      */
     public boolean validateJwtToken(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("token must not be empty");
+        }
         try {
             Jwts.parserBuilder()
                     .setSigningKey(jwtKey)
@@ -61,6 +67,9 @@ public class JwtValidator {
      * 注意：调用此方法前需要确保 token 已通过 validateJwtToken 验证
      */
     public String getSubjectFromJwtToken(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("token must not be empty");
+        }
         Claims claims = Jwts.parserBuilder()
                 .setSigningKey(jwtKey)
                 .build()
