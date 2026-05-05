@@ -2,6 +2,7 @@ package org.example.authservice.service.impl;
 
 import lombok.RequiredArgsConstructor;
 import org.common.auth.dto.TokenPair;
+import org.common.auth.utils.JwtValidator;
 import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.repository.RefreshTokenRepository;
 import org.example.authservice.security.JwtProvider;
@@ -17,6 +18,7 @@ import java.time.Instant;
 public class TokenServiceImpl implements TokenService {
 
     private final JwtProvider jwtProvider;
+    private final JwtValidator jwtValidator;
     private final RefreshTokenRepository refreshTokenRepository;
     
     @Value("${spring.jwt.refresh-expiration-days}")
@@ -25,7 +27,7 @@ public class TokenServiceImpl implements TokenService {
     /**
      * AccessToken 是 jwt
      * 用途	访问受保护资源
-     * 撤销	无法轻易撤销（等过期
+     * 撤销	无法轻易撤销（等过期）
      * @param userId
      * @return
      */
@@ -35,7 +37,7 @@ public class TokenServiceImpl implements TokenService {
     }
 
     /**
-     * RefreshToke 是 一个 自定义字符串,要存入数据库表的,用户id-》字符串
+     * RefreshToken 是 UUID 字符串，存入数据库表
      * 用途	刷新获取新的 Access Token
      * 撤销	可以撤销
      * @param userId
@@ -56,7 +58,7 @@ public class TokenServiceImpl implements TokenService {
 
     @Override
     public Boolean validateJwtToken(String jwtToken) {
-        return jwtProvider.validateJwtToken(jwtToken);
+        return jwtValidator.validateJwtToken(jwtToken);
     }
 
     @Override
