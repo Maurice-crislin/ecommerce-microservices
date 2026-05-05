@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/ecommerce?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: update   # auto create table
+    show-sql: true
+
+  jwt:
+    secret: "V3o5L2hXnZsT8O0x5kYbGk1mQ2sR9eZpYvQfHjKlL7I="  # at least 256 bit (HS256)
+    jwt-expiration-ms: 900000   # 15mins
+    refresh-expiration-days: 7
+
+
+
