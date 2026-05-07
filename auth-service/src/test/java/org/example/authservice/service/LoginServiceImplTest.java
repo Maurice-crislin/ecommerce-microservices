@@ -2,6 +2,7 @@ package org.example.authservice.service;
 
 import org.common.auth.dto.RegisterLoginRequest;
 import org.common.auth.dto.TokenPair;
+import org.common.auth.enums.UserStatus;
 import org.example.authservice.domain.UserAccount;
 import org.example.authservice.repository.UserAccountRepository;
 import org.example.authservice.service.impl.LoginServiceImpl;
@@ -31,6 +32,9 @@ class LoginServiceImplTest {
     @Mock
     private TokenService tokenService;
 
+    @Mock
+    private UserStatusService userStatusService;
+
     @InjectMocks
     private LoginServiceImpl loginService;
 
@@ -54,6 +58,7 @@ class LoginServiceImplTest {
         assertTrue(user.isActive());
         assertEquals(0, user.getFailedLoginCount());
         verify(userAccountRepository).save(user);
+        verify(userStatusService, never()).frozenUser(anyLong());
     }
 
     @Test
@@ -99,23 +104,47 @@ class LoginServiceImplTest {
         assertEquals("Invalid password", exception.getMessage());
         assertEquals(1, user.getFailedLoginCount());
         verify(userAccountRepository).save(user);
+        verify(userStatusService, never()).frozenUser(anyLong());
     }
 
     @Test
-    void shouldFreezeUserAfterFiveFailedAttempts() {
+    void shouldFreezeUserAndSyncRedisAfterFiveFailedAttempts() {
         RegisterLoginRequest request = new RegisterLoginRequest("test@example.com", "wrongPassword");
         UserAccount user = new UserAccount("test@example.com", "encodedPassword");
+        user.setId(1L);
         // 4 previous failures
         for (int i = 0; i < 4; i++) {
             user.onLoginFailure();
         }
+        assertEquals(4, user.getFailedLoginCount());
+        assertEquals(UserStatus.ACTIVE, user.getStatus());
 
         when(userAccountRepository.findByEmail("test@example.com")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("wrongPassword", "encodedPassword")).thenReturn(false);
 
         assertThrows(IllegalStateException.class, () -> loginService.login(request));
 
+        // After 5th failure, status should be FROZEN
         assertEquals(5, user.getFailedLoginCount());
+        assertEquals(UserStatus.FROZEN, user.getStatus());
         assertFalse(user.isActive());
+        // Verify Redis sync was called
+        verify(userStatusService).frozenUser(1L);
+        verify(userAccountRepository, times(1)).save(user);
+    }
+
+    @Test
+    void shouldNotCallFrozenUserOnFirstFailure() {
+        RegisterLoginRequest request = new RegisterLoginRequest("test@example.com", "wrongPassword");
+        UserAccount user = new UserAccount("test@example.com", "encodedPassword");
+
+        when(userAccountRepository.findByEmail("test@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("wrongPassword", "encodedPassword")).thenReturn(false);
+
+        assertThrows(IllegalStateException.class, () -> loginService.login(request));
+
+        assertEquals(1, user.getFailedLoginCount());
+        assertEquals(UserStatus.ACTIVE, user.getStatus());
+        verify(userStatusService, never()).frozenUser(anyLong());
     }
 }

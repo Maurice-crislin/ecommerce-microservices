@@ -35,6 +35,9 @@ class TokenServiceImplTest {
     @Mock
     private RefreshTokenRepository refreshTokenRepository;
 
+    @Mock
+    private UserStatusService userStatusService;
+
     @InjectMocks
     private TokenServiceImpl tokenService;
 
@@ -91,6 +94,7 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(oldTokenEntity));
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(false);
         when(jwtProvider.generateJwtToken("1")).thenReturn("new-access-token");
 
         TokenPair result = tokenService.regenerateBothToken(oldRefreshToken);
@@ -99,6 +103,7 @@ class TokenServiceImplTest {
         assertNotNull(result.getAccessToken());
         assertNotNull(result.getRefreshToken());
         assertTrue(oldTokenEntity.isRevoked());
+        verify(userStatusService).isBannedOrFrozen(userId);
         verify(refreshTokenRepository).save(oldTokenEntity);
         verify(refreshTokenRepository, times(2)).save(any(RefreshToken.class)); // old revoked + new saved
     }
@@ -142,5 +147,39 @@ class TokenServiceImplTest {
                 () -> tokenService.regenerateBothToken(oldRefreshToken));
 
         assertEquals("refresh token is invalid", exception.getMessage());
+    }
+
+    @Test
+    void shouldThrowExceptionWhenUserIsBanned() {
+        String oldRefreshToken = "banned-user-token";
+        Long userId = 1L;
+        RefreshToken tokenEntity = new RefreshToken(userId, oldRefreshToken,
+                Instant.now().plus(Duration.ofDays(7)));
+
+        when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> tokenService.regenerateBothToken(oldRefreshToken));
+
+        assertEquals("User has been banned", exception.getMessage());
+        verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
+    }
+
+    @Test
+    void shouldThrowExceptionWhenUserIsFrozen() {
+        String oldRefreshToken = "frozen-user-token";
+        Long userId = 1L;
+        RefreshToken tokenEntity = new RefreshToken(userId, oldRefreshToken,
+                Instant.now().plus(Duration.ofDays(7)));
+
+        when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> tokenService.regenerateBothToken(oldRefreshToken));
+
+        assertEquals("User has been banned", exception.getMessage());
+        verify(refreshTokenRepository, never()).save(any(RefreshToken.class));
     }
 }

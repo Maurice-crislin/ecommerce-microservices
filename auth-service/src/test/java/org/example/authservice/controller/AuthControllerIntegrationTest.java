@@ -3,6 +3,7 @@ package org.example.authservice.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.common.auth.dto.RegisterLoginRequest;
 import org.common.auth.dto.TokenPair;
+import org.common.auth.enums.UserStatus;
 import org.example.authservice.domain.UserAccount;
 import org.example.authservice.repository.UserAccountRepository;
 import org.junit.jupiter.api.Test;
@@ -194,6 +195,62 @@ class AuthControllerIntegrationTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("Invalid access token"));
+    }
+
+    @Test
+    void shouldFreezeUserAfterFiveFailedLoginAttempts() throws Exception {
+        String uniqueEmail = "freeze_" + System.currentTimeMillis() + "@example.com";
+        userAccountRepository.save(new UserAccount(uniqueEmail,
+                passwordEncoder.encode("password123")));
+
+        RegisterLoginRequest request = new RegisterLoginRequest(uniqueEmail, "wrongPassword");
+
+        // 4 failed attempts - should still return Invalid password
+        for (int i = 0; i < 4; i++) {
+            mockMvc.perform(post("/auth/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("Invalid password"));
+        }
+
+        // 5th failed attempt - should still show Invalid password
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Invalid password"));
+
+        // Try login with correct password - should fail because account is frozen
+        RegisterLoginRequest correctRequest = new RegisterLoginRequest(uniqueEmail, "password123");
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(correctRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Not active user"));
+
+        // Verify the user is frozen in the database
+        UserAccount user = userAccountRepository.findByEmail(uniqueEmail).orElseThrow();
+        assertEquals(UserStatus.FROZEN, user.getStatus());
+    }
+
+    @Test
+    void shouldReturnErrorWhenBannedUserTriesToLogin() throws Exception {
+        String uniqueEmail = "banned_" + System.currentTimeMillis() + "@example.com";
+        UserAccount user = userAccountRepository.save(
+                new UserAccount(uniqueEmail, passwordEncoder.encode("password123")));
+
+        // Ban via API (MySQL and Redis)
+        mockMvc.perform(post("/admin/ban/" + user.getId()))
+                .andExpect(status().isOk());
+
+        // Try to login - should be rejected because user is banned
+        RegisterLoginRequest request = new RegisterLoginRequest(uniqueEmail, "password123");
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Not active user"));
     }
 
     @Test

@@ -3,6 +3,7 @@ package org.example.authservice.controller.advice;
 import org.common.auth.dto.SimpleResponse;
 import org.example.authservice.exception.AuthException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -54,5 +55,17 @@ class AuthServiceExceptionHandlerTest {
         ResponseEntity<SimpleResponse<Void>> response = handler.handleAuthException(exception);
 
         assertEquals(403, response.getStatusCodeValue());
+    }
+
+    @Test
+    void shouldReturnUnauthorizedForJwtException() {
+        io.jsonwebtoken.JwtException exception = new io.jsonwebtoken.JwtException("JWT expired");
+
+        ResponseEntity<SimpleResponse<Void>> response = handler.handleJwtException(exception);
+
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), response.getStatusCodeValue());
+        assertNotNull(response.getBody());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("Invalid access token", response.getBody().getMessage());
     }
 }

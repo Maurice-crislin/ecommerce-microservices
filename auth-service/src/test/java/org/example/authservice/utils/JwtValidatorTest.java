@@ -1,12 +1,17 @@
 package org.example.authservice.utils;
 
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
 import org.common.auth.utils.JwtValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.security.Key;
+import java.util.Date;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,29 +19,43 @@ class JwtValidatorTest {
 
     private static final String TEST_SECRET = "V3o5L2hXnZsT8O0x5kYbGk1mQ2sR9eZpYvQfHjKlL7I=";
     private JwtValidator jwtValidator;
+    private Key signingKey;
 
     @BeforeEach
     void setUp() {
         jwtValidator = new JwtValidator(TEST_SECRET);
+        signingKey = Keys.hmacShaKeyFor(TEST_SECRET.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
     void shouldValidateAndGetUserIdFromToken() {
-        // Create a manually constructed JWT for a known user
-        // We'll use the same logic as JwtProvider
-        Header header = new Header("{\"alg\":\"HS256\",\"typ\":\"JWT\"}");
-        Payload payload = new Payload("{\"sub\":\"123\",\"iat\":1620000000,\"exp\":4620000000}");
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + 3600000); // 1 hour later
 
-        String headerBase64 = base64UrlEncode(header.toString().getBytes(StandardCharsets.UTF_8));
-        String payloadBase64 = base64UrlEncode(payload.toString().getBytes(StandardCharsets.UTF_8));
+        String token = Jwts.builder()
+                .setSubject("123")
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .compact();
 
-        String token = headerBase64 + "." + payloadBase64 + ".dummy-signature";
+        Long userId = jwtValidator.validateAndGetUserId(token);
+        assertEquals(123L, userId);
+    }
 
-        // We'll just test that the validator rejects invalid tokens
-        // (We can't generate valid JWT without the signing key in test)
-        
-        assertThrows(JwtException.class,
-                () -> jwtValidator.validateAndGetUserId(token));
+    @Test
+    void shouldRejectExpiredToken() {
+        Date past = new Date(System.currentTimeMillis() - 3600000);
+
+        String token = Jwts.builder()
+                .setSubject("123")
+                .setIssuedAt(new Date(System.currentTimeMillis() - 7200000))
+                .setExpiration(past)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .compact();
+
+        assertThrows(JwtException.class, () -> jwtValidator.validateAndGetUserId(token));
+        assertFalse(jwtValidator.validateJwtToken(token));
     }
 
     @Test
@@ -54,24 +73,66 @@ class JwtValidatorTest {
     @Test
     void shouldThrowOnEmptyToken() {
         assertThrows(IllegalArgumentException.class, () -> jwtValidator.validateJwtToken(""));
+        assertThrows(IllegalArgumentException.class, () -> jwtValidator.validateAndGetUserId(""));
+        assertThrows(IllegalArgumentException.class, () -> jwtValidator.getSubjectFromJwtToken(""));
+        assertThrows(IllegalArgumentException.class, () -> jwtValidator.getIdFromJwtToken(""));
     }
 
-    // Helper inner class for constructing JWT parts
-    private static class Header {
-        private final String content;
-        Header(String content) { this.content = content; }
-        @Override
-        public String toString() { return content; }
+    @Test
+    void shouldThrowOnNullToken() {
+        assertThrows(IllegalArgumentException.class, () -> jwtValidator.validateJwtToken(null));
+        assertThrows(IllegalArgumentException.class, () -> jwtValidator.validateAndGetUserId(null));
     }
 
-    private static class Payload {
-        private final String content;
-        Payload(String content) { this.content = content; }
-        @Override
-        public String toString() { return content; }
+    @Test
+    void shouldGetSubjectFromToken() {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + 3600000);
+
+        String token = Jwts.builder()
+                .setSubject("456")
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .compact();
+
+        // Subject can be extracted after validation
+        assertTrue(jwtValidator.validateJwtToken(token));
+        String subject = jwtValidator.getSubjectFromJwtToken(token);
+        assertEquals("456", subject);
     }
 
-    private static String base64UrlEncode(byte[] data) {
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(data);
+    @Test
+    void shouldGetJtiFromToken() {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + 3600000);
+        String jti = UUID.randomUUID().toString();
+
+        String token = Jwts.builder()
+                .setSubject("789")
+                .setId(jti)
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .compact();
+
+        assertTrue(jwtValidator.validateJwtToken(token));
+        String extractedJti = jwtValidator.getIdFromJwtToken(token);
+        assertEquals(jti, extractedJti);
+    }
+
+    @Test
+    void shouldReturnNullJtiWhenNotPresent() {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + 3600000);
+
+        String token = Jwts.builder()
+                .setSubject("789")
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
+                .compact();
+
+        assertNull(jwtValidator.getIdFromJwtToken(token));
     }
 }
