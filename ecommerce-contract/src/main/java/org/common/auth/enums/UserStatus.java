@@ -4,4 +4,5 @@ public enum UserStatus {
     ACTIVE,
     FROZEN,
     DELETED,
+    BANNED
 }

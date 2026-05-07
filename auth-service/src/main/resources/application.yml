@@ -19,5 +19,12 @@ spring:
     jwt-expiration-ms: 900000   # 15mins
     refresh-expiration-days: 7
 
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+
+
 
 
