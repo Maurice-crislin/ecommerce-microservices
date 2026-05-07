@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
+import java.util.UUID;
 
 @Component
 public class JwtProvider {
@@ -32,6 +33,7 @@ public class JwtProvider {
      * Payload 结构：
      * {
      *   "sub": userId,
+     *   "jit: jwt的唯一id
      *   "iat": 签发时间,
      *   "exp": 过期时间
      * }
@@ -41,6 +43,7 @@ public class JwtProvider {
         Date expiryDate = new Date(now.getTime() + jwtExpirationMs);
         return Jwts.builder()
                 .setSubject(userId)
+                .setId(UUID.randomUUID().toString())
                 .setIssuedAt(now)
                 .setExpiration(expiryDate)
                 .signWith(jwtKey, SignatureAlgorithm.HS256)

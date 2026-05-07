@@ -77,4 +77,20 @@ public class JwtValidator {
                 .getBody();
         return claims.getSubject();
     }
+    /**
+     * 从 JWT Payload 中提取 Id 字段（jti） 唯一token id
+     * 注意：调用此方法前需要确保 token 已通过 validateJwtToken 验证
+     */
+    public String getIdFromJwtToken(String token) {
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("token must not be empty");
+        }
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(jwtKey)
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+        return claims.getId();
+    }
+
 }
