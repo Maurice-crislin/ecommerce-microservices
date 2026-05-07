@@ -24,4 +24,10 @@ public class AuthServiceExceptionHandler {
     public ResponseEntity<SimpleResponse<Void>> handleAuthException(AuthException e){
         return ResponseEntity.status(e.getStatusCode()).body(SimpleResponse.error(e.getMessage()));
     }
+
+    @ExceptionHandler(io.jsonwebtoken.JwtException.class)
+    public ResponseEntity<SimpleResponse<Void>> handleJwtException(io.jsonwebtoken.JwtException e){
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(SimpleResponse.error("Invalid access token"));
+    }
 }

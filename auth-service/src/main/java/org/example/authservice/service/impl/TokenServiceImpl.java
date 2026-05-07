@@ -7,6 +7,7 @@ import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.repository.RefreshTokenRepository;
 import org.example.authservice.security.JwtProvider;
 import org.example.authservice.service.TokenService;
+import org.example.authservice.service.UserStatusService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +21,7 @@ public class TokenServiceImpl implements TokenService {
     private final JwtProvider jwtProvider;
     private final JwtValidator jwtValidator;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserStatusService userStatusService;
     
     @Value("${spring.jwt.refresh-expiration-days}")
     private int refreshExpirationDays;
@@ -71,6 +73,12 @@ public class TokenServiceImpl implements TokenService {
         }
 
         Long userId = oldRefreshTokenEntity.getUserId();
+
+        // 检查账户是否有效
+        if(userStatusService.isBannedOrFrozen(userId)){
+            throw new IllegalStateException("User has been banned");
+        }
+
         String newAccessToken = generateAccessToken(userId);
         String newRefreshToken = generateRefreshToken(userId);
         

@@ -6,24 +6,21 @@ import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.exception.AuthException;
 import org.example.authservice.repository.RefreshTokenRepository;
 import org.example.authservice.service.LogoutService;
-import org.example.authservice.service.TokenService;
+import org.example.authservice.service.UserStatusService;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
 public class LogoutServiceImpl implements LogoutService {
-    private final TokenService tokenService;
     private final JwtValidator jwtValidator;
+    private final UserStatusService userStatusService;
     private final RefreshTokenRepository refreshTokenRepository;
 
     // 目前双token可以做到精细控制退出哪个设备
     @Override
     public void logout(String jwtToken, String refreshToken) {
-        // 验证 JWT 有效
-        if (!tokenService.validateJwtToken(jwtToken))
-            throw new AuthException("Invalid access token");
 
-        // 使用 JwtValidator 从 JWT 中提取 userId（验证通过后调用）
+        // 使用 JwtValidator 先验证 jwt, 之后从 JWT 中提取 userId
         Long userId = jwtValidator.validateAndGetUserId(jwtToken);
 
         // 查找 refresh token
@@ -36,7 +33,13 @@ public class LogoutServiceImpl implements LogoutService {
             throw new AuthException("Refresh token doesn't match this user");
         }
 
+        // 1.revoke refreshtoken
         refreshTokenEntity.revoke();
         refreshTokenRepository.save(refreshTokenEntity);
+
+        // 2.black jwt
+        String jti = jwtValidator.getIdFromJwtToken(jwtToken);
+        userStatusService.blackJwtByJti(jti);
+
     }
 }
