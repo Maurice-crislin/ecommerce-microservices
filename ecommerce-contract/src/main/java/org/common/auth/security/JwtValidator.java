@@ -1,4 +1,4 @@
-package org.common.auth.utils;
+package org.common.auth.security;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
