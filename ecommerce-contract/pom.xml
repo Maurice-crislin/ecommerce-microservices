@@ -15,7 +15,7 @@
       <java.version>17</java.version>
       <jakarta.validation.version>3.0.2</jakarta.validation.version>
       <jackson.version>2.17.1</jackson.version>
-      <lombok.version>1.18.32</lombok.version>
+        <lombok.version>1.18.38</lombok.version>
   </properties>
 
     <dependencies>
