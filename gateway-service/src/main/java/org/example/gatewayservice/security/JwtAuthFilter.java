@@ -20,10 +20,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class JwtAuthFilter implements GlobalFilter, Ordered {
 
-
-    // customer
     private final SecurityProperties securityProperties;
-
     private final JwtValidator jwtValidator;
     private final RedisTokenService redisTokenService;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
