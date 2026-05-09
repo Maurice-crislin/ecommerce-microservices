@@ -1,0 +1,19 @@
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+jwt:
+  secret: "V3o5L2hXnZsT8O0x5kYbGk1mQ2sR9eZpYvQfHjKlL7I="
+  jwt-expiration-ms: 900000
+  refresh-expiration-days: 7
+
+auth:
+  whitelist:
+    - /api/auth/login/**
+    - /api/auth/refresh/**
+    - /api/auth/register/**
+server:
+  port: 8082

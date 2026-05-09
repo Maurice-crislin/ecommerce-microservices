@@ -1,7 +1,6 @@
 package org.example.authservice.service;
 
 import org.common.auth.dto.TokenPair;
-import org.common.auth.utils.JwtValidator;
 import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.repository.RefreshTokenRepository;
 import org.example.authservice.security.JwtProvider;
@@ -12,6 +11,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
@@ -30,13 +30,10 @@ class TokenServiceImplTest {
     private JwtProvider jwtProvider;
 
     @Mock
-    private JwtValidator jwtValidator;
-
-    @Mock
     private RefreshTokenRepository refreshTokenRepository;
 
     @Mock
-    private UserStatusService userStatusService;
+    private StringRedisTemplate stringRedisTemplate;
 
     @InjectMocks
     private TokenServiceImpl tokenService;
@@ -68,18 +65,18 @@ class TokenServiceImplTest {
     @Test
     void shouldValidateJwtToken() {
         String token = "test-jwt-token";
-        when(jwtValidator.validateJwtToken(token)).thenReturn(true);
+        when(jwtProvider.validateJwtToken(token)).thenReturn(true);
 
         Boolean result = tokenService.validateJwtToken(token);
 
         assertTrue(result);
-        verify(jwtValidator).validateJwtToken(token);
+        verify(jwtProvider).validateJwtToken(token);
     }
 
     @Test
     void shouldRejectInvalidJwtToken() {
         String token = "invalid-jwt-token";
-        when(jwtValidator.validateJwtToken(token)).thenReturn(false);
+        when(jwtProvider.validateJwtToken(token)).thenReturn(false);
 
         Boolean result = tokenService.validateJwtToken(token);
 
@@ -94,7 +91,7 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(oldTokenEntity));
-        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(false);
+        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(false);
         when(jwtProvider.generateJwtToken("1")).thenReturn("new-access-token");
 
         TokenPair result = tokenService.regenerateBothToken(oldRefreshToken);
@@ -103,7 +100,6 @@ class TokenServiceImplTest {
         assertNotNull(result.getAccessToken());
         assertNotNull(result.getRefreshToken());
         assertTrue(oldTokenEntity.isRevoked());
-        verify(userStatusService).isBannedOrFrozen(userId);
         verify(refreshTokenRepository).save(oldTokenEntity);
         verify(refreshTokenRepository, times(2)).save(any(RefreshToken.class)); // old revoked + new saved
     }
@@ -157,7 +153,9 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
-        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
+        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(true);
+        when(stringRedisTemplate.opsForValue().get("user:status:" + userId))
+                .thenReturn("BANNED");
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> tokenService.regenerateBothToken(oldRefreshToken));
@@ -174,7 +172,9 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
-        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
+        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(true);
+        when(stringRedisTemplate.opsForValue().get("user:status:" + userId))
+                .thenReturn("FROZEN");
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> tokenService.regenerateBothToken(oldRefreshToken));
