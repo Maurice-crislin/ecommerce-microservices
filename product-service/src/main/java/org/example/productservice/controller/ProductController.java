@@ -23,7 +23,7 @@ public class ProductController {
      * GET /products/{productCode}
      */
     @GetMapping("/{productCode}")
-    public ResponseEntity<ProductPriceResponse>getProductPrice(@PathVariable Long productCode){
+    public ResponseEntity<ProductPriceResponse>getProductPrice(@PathVariable(name = "productCode") Long productCode){
         try {
             ProductPriceResponse productPriceResponse = productService.getProductPrice(productCode);
             return ResponseEntity.ok(productPriceResponse);
