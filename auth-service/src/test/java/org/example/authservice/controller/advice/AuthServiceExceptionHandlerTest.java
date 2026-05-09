@@ -38,7 +38,7 @@ class AuthServiceExceptionHandlerTest {
 
     @Test
     void shouldReturnUnauthorizedForAuthException() {
-        AuthException exception = new AuthException("Unauthorized access");
+        AuthException exception = new AuthException("Unauthorized access", HttpStatus.UNAUTHORIZED);
 
         ResponseEntity<SimpleResponse<Void>> response = handler.handleAuthException(exception);
 
@@ -50,7 +50,7 @@ class AuthServiceExceptionHandlerTest {
 
     @Test
     void shouldHandleAuthExceptionWithCustomStatusCode() {
-        AuthException exception = new AuthException("Custom error", 403);
+        AuthException exception = new AuthException("Custom error", HttpStatus.FORBIDDEN);
 
         ResponseEntity<SimpleResponse<Void>> response = handler.handleAuthException(exception);
 

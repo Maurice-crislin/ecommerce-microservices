@@ -6,10 +6,12 @@ import org.common.auth.dto.TokenPair;
 import org.common.auth.enums.UserStatus;
 import org.example.authservice.domain.UserAccount;
 import org.example.authservice.repository.UserAccountRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
@@ -36,6 +38,17 @@ class AuthControllerIntegrationTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    @BeforeEach
+    void cleanRedis() {
+        // Clean Redis state between tests to avoid stale keys from previous tests
+        // (@Transactional only rolls back MySQL, not Redis)
+        stringRedisTemplate.delete(stringRedisTemplate.keys("user:status:*"));
+        stringRedisTemplate.delete(stringRedisTemplate.keys("token:blacklist:*"));
+    }
 
     @Test
     void shouldRegisterUserSuccessfully() throws Exception {

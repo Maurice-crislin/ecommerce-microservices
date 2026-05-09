@@ -1,6 +1,6 @@
 package org.example.authservice.service;
 
-import org.common.auth.utils.JwtValidator;
+import org.common.auth.security.JwtValidator;
 import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.exception.AuthException;
 import org.example.authservice.repository.RefreshTokenRepository;

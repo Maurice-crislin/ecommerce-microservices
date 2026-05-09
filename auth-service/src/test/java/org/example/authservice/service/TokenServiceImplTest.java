@@ -3,15 +3,16 @@ package org.example.authservice.service;
 import org.common.auth.dto.TokenPair;
 import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.repository.RefreshTokenRepository;
+import org.common.auth.security.JwtValidator;
 import org.example.authservice.security.JwtProvider;
 import org.example.authservice.service.impl.TokenServiceImpl;
+import org.example.authservice.service.UserStatusService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
@@ -30,10 +31,13 @@ class TokenServiceImplTest {
     private JwtProvider jwtProvider;
 
     @Mock
+    private JwtValidator jwtValidator;
+
+    @Mock
     private RefreshTokenRepository refreshTokenRepository;
 
     @Mock
-    private StringRedisTemplate stringRedisTemplate;
+    private UserStatusService userStatusService;
 
     @InjectMocks
     private TokenServiceImpl tokenService;
@@ -65,18 +69,18 @@ class TokenServiceImplTest {
     @Test
     void shouldValidateJwtToken() {
         String token = "test-jwt-token";
-        when(jwtProvider.validateJwtToken(token)).thenReturn(true);
+        when(jwtValidator.validateJwtToken(token)).thenReturn(true);
 
         Boolean result = tokenService.validateJwtToken(token);
 
         assertTrue(result);
-        verify(jwtProvider).validateJwtToken(token);
+        verify(jwtValidator).validateJwtToken(token);
     }
 
     @Test
     void shouldRejectInvalidJwtToken() {
         String token = "invalid-jwt-token";
-        when(jwtProvider.validateJwtToken(token)).thenReturn(false);
+        when(jwtValidator.validateJwtToken(token)).thenReturn(false);
 
         Boolean result = tokenService.validateJwtToken(token);
 
@@ -91,7 +95,7 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(oldTokenEntity));
-        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(false);
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(false);
         when(jwtProvider.generateJwtToken("1")).thenReturn("new-access-token");
 
         TokenPair result = tokenService.regenerateBothToken(oldRefreshToken);
@@ -153,9 +157,7 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
-        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(true);
-        when(stringRedisTemplate.opsForValue().get("user:status:" + userId))
-                .thenReturn("BANNED");
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> tokenService.regenerateBothToken(oldRefreshToken));
@@ -172,9 +174,7 @@ class TokenServiceImplTest {
                 Instant.now().plus(Duration.ofDays(7)));
 
         when(refreshTokenRepository.findByToken(oldRefreshToken)).thenReturn(Optional.of(tokenEntity));
-        when(stringRedisTemplate.hasKey("user:status:" + userId)).thenReturn(true);
-        when(stringRedisTemplate.opsForValue().get("user:status:" + userId))
-                .thenReturn("FROZEN");
+        when(userStatusService.isBannedOrFrozen(userId)).thenReturn(true);
 
         IllegalStateException exception = assertThrows(IllegalStateException.class,
                 () -> tokenService.regenerateBothToken(oldRefreshToken));
