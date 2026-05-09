@@ -9,4 +9,5 @@ public interface ProductService {
     ProductPriceResponse getProductPrice(Long productCode);
     BatchProductPriceResponse getBatchProductPrices(List<Long> productCodes);
     List<ProductPriceResponse> getProductPrices(List<Long> productCodes);
+    void deleteProduct(Long productCode);
 }

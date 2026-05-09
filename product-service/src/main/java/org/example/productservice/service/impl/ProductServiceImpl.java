@@ -27,6 +27,12 @@ public class ProductServiceImpl implements ProductService {
         return mapToProductPriceResponse(product);
     }
 
+    /**
+     * 被 getBatchProductPrices 调用,属于基础方法, 只负责批量查询数据并转换为 DTO
+     * 不对接任何外部调用端点
+     * @param productCodes
+     * @return
+     */
     @Override
     public  List<ProductPriceResponse> getProductPrices(List<Long> productCodes){
         List<Product> products = productRepository
@@ -37,6 +43,11 @@ public class ProductServiceImpl implements ProductService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 业务增强方法，在查询基础(getProductPrices)上增加了：按请求顺序重排、识别缺失产品、计算可下单状态
+     * @param productCodes
+     * @return
+     */
     @Override
     public BatchProductPriceResponse getBatchProductPrices(List<Long> productCodes){
         List<ProductPriceResponse> products = getProductPrices(productCodes);
@@ -63,5 +74,9 @@ public class ProductServiceImpl implements ProductService {
                 product.getPrice(),
                 product.getStatus()
         );
+    }
+    @Override
+    public void deleteProduct(Long productCode){
+        productRepository.deleteById(productCode);
     }
 }

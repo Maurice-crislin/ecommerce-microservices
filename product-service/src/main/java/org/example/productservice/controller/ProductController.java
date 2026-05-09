@@ -66,4 +66,13 @@ public class ProductController {
         }
         return ResponseEntity.ok(productService.getBatchProductPrices(productCodes));
     }
+    @PostMapping("/delete/{productCode}")
+    public ResponseEntity<Void> deleteProduct(@PathVariable(name = "productCode") Long productCode){
+        try {
+            productService.deleteProduct(productCode);
+            return ResponseEntity.noContent().build(); // 204  no content
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build(); // 404 not found
+        }
+    }
 }
