@@ -1,6 +1,6 @@
 package org.example.authservice.config;
 
-import org.common.auth.utils.JwtValidator;
+import org.common.auth.security.JwtValidator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

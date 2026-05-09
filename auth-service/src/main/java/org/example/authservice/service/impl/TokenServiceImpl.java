@@ -2,7 +2,7 @@ package org.example.authservice.service.impl;
 
 import lombok.RequiredArgsConstructor;
 import org.common.auth.dto.TokenPair;
-import org.common.auth.utils.JwtValidator;
+import org.common.auth.security.JwtValidator;
 import org.example.authservice.domain.RefreshToken;
 import org.example.authservice.repository.RefreshTokenRepository;
 import org.example.authservice.security.JwtProvider;
