@@ -11,6 +11,10 @@ spring:
       port: 6379
       timeout: 1800000ms
 
+product:
+  cache:
+    ttl: 1800000  # 缓存过期时间(ms), 默认30分钟, 用于存储正常商品数据
+
 
   jpa:
     hibernate:
