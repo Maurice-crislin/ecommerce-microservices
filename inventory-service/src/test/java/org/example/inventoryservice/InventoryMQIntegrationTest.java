@@ -9,14 +9,17 @@ import org.example.inventoryservice.domain.OperationType;
 import org.example.inventoryservice.messaging.RabbitMQConfig;
 import org.example.inventoryservice.repository.InventoryOperationRepository;
 import org.example.inventoryservice.repository.InventoryRepository;
+import org.example.inventoryservice.service.InventoryIdempotencyExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,6 +36,9 @@ public class InventoryMQIntegrationTest {
     @Autowired
     private InventoryOperationRepository inventoryOperationRepository;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     private RabbitTemplate testRabbitTemplate;
 
     @BeforeEach
@@ -47,14 +53,20 @@ public class InventoryMQIntegrationTest {
             return null;
         });
 
-        // 2️⃣ Wait a bit for any in-flight messages from previous test to finish
+        // 2️⃣ Clean Redis idempotency keys to avoid state leakage between tests
+        Set<String> idempotencyKeys = stringRedisTemplate.keys(InventoryIdempotencyExecutor.IDEM_PREFIX + "*");
+        if (idempotencyKeys != null && !idempotencyKeys.isEmpty()) {
+            stringRedisTemplate.delete(idempotencyKeys);
+        }
+
+        // 3️⃣ Wait a bit for any in-flight messages from previous test to finish
         try {
             Thread.sleep(200);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
 
-        // 3️⃣ Clean database
+        // 4️⃣ Clean database
         inventoryOperationRepository.deleteAll();
         inventoryRepository.deleteAll();
         inventoryOperationRepository.flush();
@@ -203,81 +215,15 @@ public class InventoryMQIntegrationTest {
 
     // ====================== UNLOCK IDEMPOTENCY ======================
 
-    /** ## 问题分析
-
-     根据错误日志和代码分析，`testUnlockIdempotency()` 测试失败的根本原因是**幂等性机制在并发场景下的实现缺陷**。
-
-     ### 错误现象
-     1. **SQL Error 1062**: 唯一约束冲突 - `Duplicate entry '4-UNLOCK' for key 'inventory_operation.UKqcb0q1mdk8chvdcb5w07rywnn'`
-     2. **OperationProcessingException**: "Inventory lock is still processing for order 4"
-     3. **IllegalStateException**: "Previous operation failed for order 3"
-     4. **断言失败**: Expected: 1, Actual: 2（插入了2条记录而不是预期的1条）
-
-     ### 根本原因分析
-
-     #### 1. 幂等性检查逻辑缺陷
-     在 `InventoryIdempotencyExecutor.executeWithIdempotency()` 方法中：
-
-     ```java
-     @Transactional(propagation = Propagation.REQUIRES_NEW)
-     public void executeWithIdempotency(Long orderId, OperationType operationType, Runnable batchLogic) {
-     try {
-     inventoryOperationService.getOrStartOperation(orderId, operationType);
-     } catch (DataIntegrityViolationException e) {
-     InventoryOperation inventoryOperation = inventoryOperationService.getOperationByOrderIdAndOperationType(orderId, operationType);
-
-     if(inventoryOperation.getOperationStatus() == OperationStatus.FAILED){
-     throw new IllegalStateException("Previous operation failed for order " + orderId);
-     }
-
-     if(inventoryOperation.getOperationStatus() == OperationStatus.SUCCESS){
-     return; // 幂等返回
-     }
-
-     if (inventoryOperation.getOperationStatus() == OperationStatus.PROCESSING){
-     throw new OperationProcessingException("Inventory lock is still processing for order " + orderId);
-     }
-     }
-
-     try {
-     batchLogic.run();
-     inventoryOperationService.markSuccess(orderId, operationType);
-     } catch (IllegalArgumentException e) {
-     inventoryOperationService.markFailed(orderId, operationType);
-     throw e;
-     }
-     }
-     ```
-
-      **问题**：当多个线程同时执行时：
-     - 线程A成功插入 `InventoryOperation` 记录（状态为 `PROCESSING`）
-     - 线程B、C、D等尝试插入时遇到唯一约束冲突
-     - 它们捕获异常后查询记录状态，但此时线程A的事务可能还未提交
-     - 线程B看到状态为 `PROCESSING`，抛出 `OperationProcessingException`
-     - 线程A的业务逻辑执行完成后调用 `markSuccess()`，但异常处理可能导致事务回滚
-
-     #### 2. 事务边界问题
-     - `getOrStartOperation()` 使用 `REQUIRES_NEW` 传播级别，确保独立提交
-     - 但 `batchLogic.run()` 和 `markSuccess()` 在同一个事务中
-     - 如果 `batchLogic.run()` 抛出异常，整个事务回滚，包括已插入的 `InventoryOperation` 记录
-
-     #### 3. 并发控制不足
-     在高并发场景下（15个线程同时发送解锁消息）：
-     - 多个线程可能同时通过唯一约束检查
-     - 乐观锁机制未能有效防止重复插入
-     - 异常处理逻辑没有考虑重试机制
-
-     ### 解决方案建议
-
-     1. **改进幂等性检查**：在捕获 `DataIntegrityViolationException` 后，应该重试检查记录状态，而不是立即抛出异常
-
-     2. **增强事务隔离**：确保 `InventoryOperation` 记录的创建和状态更新是原子的
-
-     3. **添加重试机制**：对于 `PROCESSING` 状态的记录，应该等待并重试，而不是直接失败
-
-     4. **使用分布式锁**：在分布式环境下，考虑使用 Redis 或 Zookeeper 实现分布式锁
-
-     这个测试暴露了在高并发场景下幂等性实现的不足，需要优化并发控制逻辑。*/
+    /**
+     * 验证高并发重复 UNLOCK 消息场景下的幂等性。
+     * <p>
+     * 旧问题分析已归档至 IDEMPOTENCY_FIX_ANALYSIS.md。
+     * 当前幂等控制采用 Redis + DB 双层架构：
+     * - Redis 层：SETNX + 状态缓存（PROCESSING → SUCCESS/FAILED），第一道快速防线
+     * - DB 层：唯一约束 + 幂等记录表，兜底防线
+     * 即使 Redis key 过期丢失，DB 唯一约束仍能保证幂等。
+     */
     @Test
     public void testUnlockIdempotency() throws InterruptedException {
 

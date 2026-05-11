@@ -11,17 +11,20 @@ import org.example.inventoryservice.domain.OperationType;
 import org.example.inventoryservice.dto.SimpleResponse;
 import org.example.inventoryservice.repository.InventoryRepository;
 import org.example.inventoryservice.repository.InventoryOperationRepository;
+import org.example.inventoryservice.service.InventoryIdempotencyExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -44,16 +47,25 @@ public class InventoryConcurrencyApiTests {
     @Autowired
     private InventoryOperationRepository inventoryOperationRepository;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     private List<StockRequest> stockRequests;
 
     @BeforeEach
     void setup() {
 
-        // 先删除操作记录
+        // 0️⃣ Redis 幂等 key 清理（防止前一个测试的 Redis 状态残留）
+        Set<String> idempotencyKeys = stringRedisTemplate.keys(InventoryIdempotencyExecutor.IDEM_PREFIX + "*");
+        if (idempotencyKeys != null && !idempotencyKeys.isEmpty()) {
+            stringRedisTemplate.delete(idempotencyKeys);
+        }
+
+        // 1️⃣ 先删除操作记录
         inventoryOperationRepository.deleteAll();
         inventoryOperationRepository.flush();  // 强制刷新
 
-        // 再删除库存记录
+        // 2️⃣ 再删除库存记录
         inventoryRepository.deleteAll();
         inventoryRepository.flush();  // 强制刷新
 
