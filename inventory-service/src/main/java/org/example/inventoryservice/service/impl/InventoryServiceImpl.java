@@ -79,6 +79,7 @@ public class InventoryServiceImpl implements InventoryService {
 
 
 
+    // 没有retry设置,客户端接到500之后自行决定重试
     @Override
     public void batchLockStockWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
         inventoryIdempotencyExecutor.executeWithIdempotency(
@@ -89,6 +90,7 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
 
+    // RabbitMQ + @Retryable
     @Override
     public void batchConfirmSaleWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
         inventoryIdempotencyExecutor.executeWithIdempotency(
@@ -97,6 +99,7 @@ public class InventoryServiceImpl implements InventoryService {
                 () ->inventoryDomainService.batchConfirmSale(inventoryBatchRequest.getStockRequestList())
         );
     }
+    // RabbitMQ + @Retryable
     @Override
     public void batchUnlockStockWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
         inventoryIdempotencyExecutor.executeWithIdempotency(
