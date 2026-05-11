@@ -18,7 +18,6 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static java.lang.Thread.sleep;
 
 @Service
 @RequiredArgsConstructor
@@ -36,7 +35,7 @@ public class ProductServiceImpl implements ProductService {
     // 真正商品缓存时间
     private int cacheTtl;
 
-    public void setRedisKV(String key, Object value, long timeout, TimeUnit unit) {
+    private void setRedisKV(String key, Object value, long timeout, TimeUnit unit) {
         try{
             redisTemplate.opsForValue().set(key, value, timeout, unit);
         } catch(Exception e){
@@ -44,6 +43,32 @@ public class ProductServiceImpl implements ProductService {
         }
     }
 
+    private void sleep(long millis) {
+        try{
+            Thread.sleep(millis);
+        } catch(InterruptedException ignored){}
+    }
+
+    private Product tryGetProductFromRedis(String cacheKey){
+        try{
+            return (Product) redisTemplate.opsForValue().get(cacheKey);
+        } catch (Exception e) {
+            e.printStackTrace();
+            // redis查询出错, product保持null, 后续走锁+DB查询路径
+            return null;
+        }
+    }
+    private Optional<ProductPriceResponse> checkRedisCacheHit(long productCode,Product product) {
+        // 空对象,走后续锁和db逻辑
+        if(product == null) return Optional.empty();
+
+        // product自身不为空, 且不是占位空白对象, 即为有效对象
+        if(product.getProductCode() != null) return Optional.of(this.mapToProductPriceResponse(product));
+        else{
+            // 非空的空白占位对象,显示不存在,db里面不会有的,对象不合法
+            throw new IllegalArgumentException("Product not found " + productCode);
+        }
+    }
 
 
     @Override
@@ -67,20 +92,12 @@ public class ProductServiceImpl implements ProductService {
 
         // 1.查redis
         Product product = null;
-        try {
-            product = (Product) redisTemplate.opsForValue().get(cacheKey);
-        } catch (Exception e) {
-            // redis查询出错, product保持null, 后续走锁+DB查询路径
-            e.printStackTrace();
-        }
 
-        // 空值/占位对象检测在try块之外,抛出的异常不会被catch拦截
-        if (product != null) {
-            // product自身不为空, 且不是占位空白对象, 即为有效对象,返回查询结果
-            if(product.getProductCode() != null) return mapToProductPriceResponse(product);
-            // 非空的空白占位对象,显示不存在,db里面不会有的,对象不合法
-            throw new IllegalArgumentException("Product not found: " + productCode);
-        }
+        product = this.tryGetProductFromRedis(cacheKey);
+
+        Optional<ProductPriceResponse> productPriceResponse = this.checkRedisCacheHit(productCode, product);
+
+        if(productPriceResponse.isPresent())return productPriceResponse.get();
 
 
         // true 代表之前不存在并且当下被设置
@@ -91,14 +108,14 @@ public class ProductServiceImpl implements ProductService {
             // 获得锁
             try {
                 // 1.Double-Check: 重复查一次redis,也许在等待锁的过程中,redis被写入值了
-                product = (Product) redisTemplate.opsForValue().get(cacheKey);
+                product = this.tryGetProductFromRedis(cacheKey);
 
-                if (product != null) {
-                    // product自身不为空, 且不是占位空白对象, 即为有效对象,返回查询结果
-                    if(product.getProductCode() != null) return  mapToProductPriceResponse(product);
-                    // 非空的空白占位对象,显示不存在
-                    throw new IllegalArgumentException("Product not found: " + productCode);
-                }
+                productPriceResponse = this.checkRedisCacheHit(productCode, product);
+
+                if(productPriceResponse.isPresent())return productPriceResponse.get();
+
+
+
                 // 2.查db
                 Optional<Product> optionalProduct = productRepository
                         .findProductByProductCode(productCode);
@@ -112,7 +129,6 @@ public class ProductServiceImpl implements ProductService {
 
                 product = optionalProduct.get();
 
-
                 // 3.db查到了,回写redis
                 this.setRedisKV(cacheKey, product,cacheTtl, TimeUnit.MILLISECONDS);
 
@@ -125,10 +141,7 @@ public class ProductServiceImpl implements ProductService {
 
         } else {
             // 没有获取到锁,休眠后重试(带重试次数限制)
-            try{
-                Thread.sleep(LOCK_RETRY_SLEEP_MS);
-            } catch(InterruptedException ignored){}
-
+            this.sleep(LOCK_RETRY_SLEEP_MS);
             // 重试(带重试次数限制)
             return getProductPriceWithRetry(productCode, attempt + 1);
         }
@@ -195,12 +208,7 @@ public class ProductServiceImpl implements ProductService {
         // 再删db
         productRepository.deleteById(productCode);
 
-        try{
-            sleep(CACHE_DELETE_SLEEP_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // 保持中断状态
-            // 日志记录，但不影响继续执行第二次删除
-        }
+        this.sleep(CACHE_DELETE_SLEEP_MS);
         // 第二次删除缓存（确保清空可能被并发读线程写入的旧数据）
         redisTemplate.delete(cacheKey);
     }
@@ -234,12 +242,7 @@ public class ProductServiceImpl implements ProductService {
         // 再改db
         Product savedProduct = productRepository.save(product);
 
-        try{
-            sleep(CACHE_DELETE_SLEEP_MS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // 保持中断状态
-            // 日志记录，但不影响继续执行第二次删除
-        }
+        this.sleep(CACHE_DELETE_SLEEP_MS);
         // 第二次删除缓存（确保清空可能被并发读线程写入的旧数据）
         redisTemplate.delete(cacheKey);
 
