@@ -2,6 +2,7 @@ package org.example.productservice.service.impl;
 
 
 import lombok.RequiredArgsConstructor;
+import org.example.productservice.cache.ProductBloomFilter;
 import org.example.productservice.dto.*;
 import org.example.productservice.entity.Product;
 import org.example.productservice.enums.ProductStatus;
@@ -21,6 +22,7 @@ import java.util.stream.Collectors;
 public class ProductServiceImpl implements ProductService {
     private final ProductRepository productRepository;
     private final RedisTemplate<String,Object> redisTemplate;
+    private final ProductBloomFilter productBloomFilter;
 
     private static final String PRODUCT_DETAIL_PREFIX = "product:detail:";
     private static final String PRODUCT_LOCK_PREFIX = "product:lock:";
@@ -70,6 +72,12 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public ProductPriceResponse getProductPrice(Long productCode){
+        if(productCode == null){
+            throw new IllegalArgumentException("Product code is null");
+        }
+        if(!productBloomFilter.mightContain(productCode)){
+            throw new IllegalArgumentException("Product not found:" + productCode);
+        }
         return getProductPriceWithRetry(productCode, 0);
     }
 
@@ -77,9 +85,6 @@ public class ProductServiceImpl implements ProductService {
      * 带重试上限的缓存查询方法,避免递归溢出
      */
     private ProductPriceResponse getProductPriceWithRetry(Long productCode, int attempt){
-        if(productCode == null){
-            throw new IllegalArgumentException("Product code is null");
-        }
         if(attempt >= LOCK_RETRY_MAX_ATTEMPTS){
             throw new RuntimeException("Failed to acquire lock for product: " + productCode + " after " + LOCK_RETRY_MAX_ATTEMPTS + " attempts");
         }
@@ -151,7 +156,7 @@ public class ProductServiceImpl implements ProductService {
         }
 
         if (index >= cachedValues.size()) return null;
-        
+
         Object raw = cachedValues.get(index);
 
         if (!(raw instanceof Product)) {
@@ -170,6 +175,16 @@ public class ProductServiceImpl implements ProductService {
      */
     @Override
     public List<ProductPriceResponse> getProductPrices(List<Long> productCodes) {
+
+        // 0.bloom filter
+        productCodes = productCodes
+                .stream()
+                .distinct()
+                .filter(productBloomFilter::mightContain)
+                .toList();
+        if(productCodes.isEmpty()) return Collections.emptyList();
+
+
         // 1: 批量读 Redis
         List<String> cacheKeys = productCodes.stream()
                 .map(code -> PRODUCT_DETAIL_PREFIX + code)
