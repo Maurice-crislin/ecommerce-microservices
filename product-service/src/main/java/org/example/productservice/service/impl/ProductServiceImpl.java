@@ -11,10 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -147,21 +144,83 @@ public class ProductServiceImpl implements ProductService {
         }
 
     }
+   private Product extractProduct(List<Object> cachedValues, int index) {
+
+        if (cachedValues == null) {
+            return null;
+        }
+
+        if (index >= cachedValues.size()) return null;
+        
+        Object raw = cachedValues.get(index);
+
+        if (!(raw instanceof Product)) {
+            return null;
+        }
+
+        return (Product) raw;
+    }
 
     /**
      * 被 getBatchProductPrices 调用,属于基础方法, 只负责批量查询数据并转换为 DTO
      * 不对接任何外部调用端点
+     * 不需要分布式锁（批量场景逐条加锁性能太差），直接用 __批量读 + 批量回写__。
      * @param productCodes
      * @return
      */
     @Override
-    public  List<ProductPriceResponse> getProductPrices(List<Long> productCodes){
-        List<Product> products = productRepository
-                .findProductsByProductCodeIn(productCodes);
+    public List<ProductPriceResponse> getProductPrices(List<Long> productCodes) {
+        // 1: 批量读 Redis
+        List<String> cacheKeys = productCodes.stream()
+                .map(code -> PRODUCT_DETAIL_PREFIX + code)
+                .toList();
+        List<Object> cachedValues = redisTemplate.opsForValue().multiGet(cacheKeys);
 
-        return products.stream()
-                .map(this::mapToProductPriceResponse)
-                .collect(Collectors.toList());
+        // 2: 遍历分类
+        List<Long> missCodes = new ArrayList<>();
+        Map<Long, ProductPriceResponse> hitMap = new HashMap<>();
+
+        for (int i = 0; i < productCodes.size(); i++) {
+            Long code = productCodes.get(i);
+            Product product = extractProduct(cachedValues, i);
+
+            if (product == null) {
+                missCodes.add(code);  // redis查不到,之后去db查
+            } else if (product.getProductCode() != null) { // 有效
+                hitMap.put(code, mapToProductPriceResponse(product));  // 缓存命中
+            }
+            // 空占位 → 跳过,不加入结果
+        }
+
+        // 3: 批量查 DB
+        if (!missCodes.isEmpty()) {
+            // redis没有的查db
+            List<Product> dbProducts = productRepository.findProductsByProductCodeIn(missCodes);
+
+            // 查到 DB 的 → 回写缓存 + 加入结果
+            for (Product p : dbProducts) {
+                hitMap.put(p.getProductCode(), mapToProductPriceResponse(p));
+                this.setRedisKV(PRODUCT_DETAIL_PREFIX + p.getProductCode(), p, cacheTtl, TimeUnit.MILLISECONDS);
+            }
+
+
+            Set<Long> dbFoundCodes = dbProducts.stream()
+                    .map(Product::getProductCode)
+                    .collect(Collectors.toSet());
+
+            // redis查不到 db也查不到 → 写空值占位防穿透
+            for (Long missCode : missCodes) {
+                if (!dbFoundCodes.contains(missCode)) {
+                    this.setRedisKV(PRODUCT_DETAIL_PREFIX + missCode, new Product(), 5, TimeUnit.MINUTES);
+                }
+            }
+        }
+
+        // 4: 按输入顺序返回
+        return productCodes.stream()
+                .map(hitMap::get)
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     /**
