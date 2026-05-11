@@ -2,9 +2,7 @@ package org.example.productservice.controller;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.example.productservice.dto.BatchProductPriceRequest;
-import org.example.productservice.dto.BatchProductPriceResponse;
-import org.example.productservice.dto.ProductPriceResponse;
+import org.example.productservice.dto.*;
 import org.example.productservice.entity.Product;
 import org.example.productservice.service.ProductService;
 import org.springframework.http.ResponseEntity;
@@ -74,5 +72,15 @@ public class ProductController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build(); // 404 not found
         }
+    }
+
+    @PostMapping("/add")
+    public ResponseEntity<ProductResponse> addProduct(@Valid @RequestBody ProductCreateRequest productCreateRequest){
+        return ResponseEntity.ok(productService.addProduct(productCreateRequest));
+    }
+
+    @PostMapping("/update/{productCode}")
+    public ResponseEntity<ProductResponse> updateProduct(@PathVariable(name = "productCode") Long productCode, @RequestBody @Valid ProductUpdateRequest productUpdateRequest){
+        return ResponseEntity.ok(productService.updateProduct(productCode, productUpdateRequest));
     }
 }
