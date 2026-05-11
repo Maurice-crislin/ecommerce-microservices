@@ -39,10 +39,24 @@ public class InventoryMQIntegrationTest {
     void setup() {
 
         testRabbitTemplate = rabbitTemplate;
-        // clean db
+
+        // 1️⃣ Purge queues to avoid message leakage between tests
+        testRabbitTemplate.execute(channel -> {
+            channel.queuePurge(RabbitMQConfig.INVENTORY_UNLOCK_QUEUE);
+            channel.queuePurge(RabbitMQConfig.INVENTORY_CONFIRM_QUEUE);
+            return null;
+        });
+
+        // 2️⃣ Wait a bit for any in-flight messages from previous test to finish
+        try {
+            Thread.sleep(200);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        // 3️⃣ Clean database
         inventoryOperationRepository.deleteAll();
         inventoryRepository.deleteAll();
-
         inventoryOperationRepository.flush();
         inventoryRepository.flush();
     }

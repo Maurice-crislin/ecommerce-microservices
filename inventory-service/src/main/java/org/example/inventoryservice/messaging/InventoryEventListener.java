@@ -2,6 +2,7 @@ package org.example.inventoryservice.messaging;
 
 import lombok.RequiredArgsConstructor;
 import org.common.inventory.dto.InventoryBatchRequest;
+import org.example.inventoryservice.exception.OperationProcessingException;
 import org.example.inventoryservice.service.InventoryService;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -16,7 +17,7 @@ public class InventoryEventListener {
 
     @RabbitListener(queues = RabbitMQConfig.INVENTORY_UNLOCK_QUEUE)
     @Retryable(
-            value = {OptimisticLockingFailureException.class},
+            value = {OptimisticLockingFailureException.class, OperationProcessingException.class},
             maxAttempts = 5,
             backoff = @Backoff(delay = 2000, multiplier = 2)
     )
@@ -27,7 +28,7 @@ public class InventoryEventListener {
     }
     @RabbitListener(queues = RabbitMQConfig.INVENTORY_CONFIRM_QUEUE)
     @Retryable(
-            value = {OptimisticLockingFailureException.class},
+            value = {OptimisticLockingFailureException.class, OperationProcessingException.class},
             maxAttempts = 5,
             backoff = @Backoff(delay = 2000, multiplier = 2)
     )

@@ -1,0 +1,192 @@
+# `testUnlockIdempotency()` 测试失败的根本原因分析
+
+我已经仔细阅读了你全部的代码。这是一个非常好的问题，涉及并发、事务传播和消息队列的复杂交互。让我用一个通俗易懂的方式，从头到尾为你分析。
+
+---
+
+## 1. 测试在做什么？
+
+测试做了这几件事：
+1. **准备数据**：创建产品 1004，库存总量=5，锁定库存=3
+2. **向 MQ 发送 15 条重复的 UNLOCK 消息**（订单 4，解锁 3 件商品）
+3. **等 15 条消息被异步处理完**
+4. **验证**：最终库存应为可用=5，锁定=0，且 `inventory_operation` 表中**只有 1 条** powered记录（orderId=4, operationType=UNLOCK, status=SUCCESS）
+
+---
+
+## 2. 理想情况下应该怎样工作？
+
+当一条 UNLOCK 消息被消费时，调用链是：
+
+```
+InventoryEventListener.handleUnlockStock()
+  → InventoryServiceImpl.batchUnlockStockWithIdempotency()
+    → InventoryIdempotencyExecutor.executeWithIdempotency(orderId=4, UNLOCK, batchLogic)
+```
+
+`executeWithIdempotency` 的逻辑是：
+1. 调用 `getOrStartOperation()` → 在 `inventory_operation` 表插入一条记录 `(orderId=4, UNLOCK, PROCESSING)`
+2. 因为数据库有**唯一约束 `(order_id, operation_type)`**，所以只有**第一条消息**能插入成功
+3. 插入成功后执行业务逻辑 `batchUnlockStock()` → 解锁库存
+4. 最后调用 `markSuccess()` → 将记录状态改为 `SUCCESS`
+5. 后续重复消息插入时遇到唯一约束冲突，捕获异常，查到已有记录：
+   - 如果状态是 `SUCCESS` → 直接返回（幂等）
+   - 如果状态是 `PROCESSING` → 抛出 `OperationProcessingException("still processing")`
+   - 如果状态是 `FAILED` → 抛出 `IllegalStateException("Previous operation failed")`
+
+这套机制设计上可以防止重复处理，但实际执行时出了大问题。
+
+---
+
+## 3. 测试为什么会失败？
+
+根据你注释中列出的错误（结合代码分析），有**多个叠加的问题**：
+
+### 🚨 问题一：`OperationProcessingException` 没有被重试
+
+`InventoryEventListener.handleUnlockStock()` 上有 `@Retryable`：
+
+```java
+@Retryable(
+    value = {OptimisticLockingFailureException.class},  // ⚠️ 只重试乐观锁异常
+    maxAttempts = 5,
+    backoff = @Backoff(delay = 2000, multiplier = 2)
+)
+public void handleUnlockStock(InventoryBatchRequest inventoryBatchEvent) {
+    inventoryService.batchUnlockStockWithIdempotency(inventoryBatchEvent);
+}
+```
+
+**问题**：当 14 个"失败线程"抛出 `OperationProcessingException` 时，`@Retryable` **不会重试**这个异常！它只重试 `OptimisticLockingFailureException`。
+
+结果是：这 14 条消息的处理**直接失败**，消息可能会被 RabbitMQ 重新入队（requeue）或丢弃。如果被重新入队，它们会再次被消费，再次尝试插入，再次失败... 造成**无限重试循环**。
+
+### 🚨 问题二：Spring 事务与异常处理的冲突
+
+关键代码在 `InventoryIdempotencyExecutor.executeWithIdempotency()`：
+
+```java
+@Transactional(propagation = Propagation.REQUIRES_NEW)  // ⚠️ 注意这里！
+public void executeWithIdempotency(Long orderId, OperationType operationType, Runnable batchLogic) {
+    try {
+        inventoryOperationService.getOrStartOperation(orderId, operationType); // 内部也是 REQUIRES_NEW
+    } catch (DataIntegrityViolationException e) {
+        // ... 查到 PROCESSING，抛出 OperationProcessingException
+    }
+
+    try {
+        batchLogic.run();
+        inventoryOperationService.markSuccess(orderId, operationType);
+    } catch (IllegalArgumentException e) {
+        inventoryOperationService.markFailed(orderId, operationType);
+        throw e;
+    }
+}
+```
+
+`executeWithIdempotency` 方法本身有 `@Transactional(propagation = REQUIRES_NEW)`。这意味着：
+- 方法开始时，**启动一个新事务**（称为 TX_outer）
+- 调用 `getOrStartOperation()` 时也使用 `REQUIRES_NEW` → **再启动一个新事务**（称为 TX_inner），挂起 TX_outer
+- TX_inner 插入记录并提交 → **PROCESSING 记录已持久化到数据库**
+- 回到 TX_outer
+
+**"赢家线程"（成功插入的那条消息）** 的流程：
+```
+TX_outer 开始 → getOrStartOperation() → TX_inner 开始 → INSERT成功 → TX_inner提交
+→ batchLogic.run() → markSuccess() → 更新为SUCCESS → 成功
+```
+
+**"输家线程"（其余 14 条消息）** 的流程：
+```
+TX_outer 开始 → getOrStartOperation() → TX_inner 开始 → INSERT失败（唯一约束冲突）
+→ TX_inner回滚 → DataIntegrityViolationException 被捕获 → 查询已有记录 = PROCESSING
+→ 抛出 OperationProcessingException → TX_outer 被标记为 rollback → 异常向上传播
+```
+
+**但这里有一个关键问题**：`markSuccess()` 的 `catch` 块**只捕获 `IllegalArgumentException`**：
+
+```java
+try {
+    batchLogic.run();
+    inventoryOperationService.markSuccess(orderId, operationType);
+} catch (IllegalArgumentException e) {
+    inventoryOperationService.markFailed(orderId, operationType);
+    throw e;
+}
+```
+
+如果 `batchLogic.run()` 抛出**其他类型的异常**（比如 `RuntimeException`、`OptimisticLockingFailureException`），它**不会被捕获**。这些异常会直接穿透到 `executeWithIdempotency` 外，导致 `TX_outer` 回滚。但是由于 `getOrStartOperation()` 的 `TX_inner` **已经提交了**，回滚 TX_outer **并不能删除那条 PROCESSING 记录**。
+
+这就导致了一个**孤立的 PROCESSING 记录**——解锁操作失败了，但数据库里的记录状态却是 PROCESSING，永远不会变成 SUCCESS 或 FAILED。
+
+### 🚨 问题三：@BeforeEach 清理与前一个测试的遗留消息冲突
+
+```java
+@BeforeEach
+void setup() {
+    testRabbitTemplate = rabbitTemplate;
+    // clean db
+    inventoryOperationRepository.deleteAll();
+    inventoryRepository.deleteAll();
+    inventoryOperationRepository.flush();
+    inventoryRepository.flush();
+}
+```
+
+**这可能是最致命的测试设计问题。**
+
+`testConfirmIdempotency()` 发送了 **25 条 CONFIRM 消息给 orderId=3**。这些消息是**异步处理**的。当 `testConfirmIdempotency()` 方法结束（通过 `waitUntil` 判断完成）时，**并不代表所有 25 条消息都已经被处理完**。可能有几条消息还在队列中或正在被处理。
+
+当 `testUnlockIdempotency()` 开始执行 `@BeforeEach` 清理时：
+1. 清理删除了所有 `inventory_operation` 记录
+2. 但某个**仍然在处理 `testConfirmIdempotency` 遗留消息的线程**，此刻可能刚通过幂等性检查，正在调用 `markSuccess()`
+3. 这个线程再次插入了一条 `(orderId=3, CONFIRM)` 记录
+
+所以当 `testUnlockIdempotency()` 结束时，数据库中有：
+- 1 条 order=3 的遗留记录（来自上一个测试的延迟线程）
+- 1 条 order=4 的正常记录（来自本测试）
+
+→ **`assertEquals(1, ops.size())` 失败：Expected 1，Actual 2**
+
+这也解释了为什么你会看到错误：
+> **"IllegalStateException: Previous operation failed for order 3"**
+
+这条错误出现在处理 order=3 的遗留消息时，但 `testUnlockIdempotency` 测试的是 order=4！
+
+---
+
+## 4. 总结：问题全景图
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    测试问题全景                        │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  问题1：OperationProcessingException 未纳入重试         │
+│  → 14/15 条消息直接失败，可能无限 requeue              │
+│                                                      │
+│  问题2：事务设计缺陷                                    │
+│  ┌─ TX_inner (getOrStartOperation) REQUIRES_NEW     │
+│  │   INSERT成功 → 已提交（不可回滚）                   │
+│  └─ TX_outer (executeWithIdempotency) REQUIRES_NEW  │
+│      batchLogic异常 → TX_outer回滚                   │
+│      → PROCESSING 记录变成"孤魂野鬼"，永远卡住         │
+│                                                      │
+│  问题3：测试间消息污染                                  │
+│  testConfirmIdempotency(25条消息)                     │
+│    → 异步处理未完全结束                                │
+│    → @BeforeEach 清理                                    │
+│    → 遗留线程插入 order=3 的记录                       │
+│    → testUnlockIdempotency 断言 1=2                   │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+### 核心矛盾一句话总结
+
+**幂等性机制依赖数据库唯一约束来防重，但在高并发场景下，事务边界设计不当 + 异常处理不完整 + 消息异步处理与测试清理的竞态条件，共同导致了测试失败。**
+
+如果你想修复这个问题，我可以在进入 Act 模式后提供具体的代码修复方案。修复方向包括：
+1. 在 `@Retryable` 中加入 `OperationProcessingException`
+2. 优化事务设计，避免 PROCESSING 记录成为孤儿
+3. 在测试中确保前一个测试的所有消息处理完全结束（例如加入 `Thread.sleep` 或等待队列清空）
