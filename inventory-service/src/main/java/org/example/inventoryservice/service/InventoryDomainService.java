@@ -1,8 +1,5 @@
 package org.example.inventoryservice.service;
 
-
-
-
 import org.common.inventory.dto.StockRequest;
 
 import java.util.List;
