@@ -6,6 +6,7 @@ import org.example.inventoryservice.domain.OperationStatus;
 import org.example.inventoryservice.domain.OperationType;
 import org.example.inventoryservice.exception.OperationProcessingException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -29,11 +30,15 @@ public class InventoryIdempotencyExecutor {
      * 本方法不持有一级事务（没有 @Transactional），而是将事务边界委托给内部调用的各个方法：
      *
      *   {@link InventoryOperationService#getOrStartOperation} - 使用 REQUIRES_NEW 独立提交操作记录的创建
-     *   {@link InventoryOperationService#markSuccess} / {@link InventoryOperationService#markFailed} - 使用 REQUIRES_NEW 独立提交状态更新
+     *   {@link InventoryOperationService#markSuccess} / {@link InventoryOperationService#markFailed} / {@link InventoryOperationService#deleteOperation} - 使用 REQUIRES_NEW 独立提交
      *   batchLogic - 由具体实现（如 batchUnlockStock/batchConfirmSale）自行管理事务
      *
      * 这样做的好处是：即使 batchLogic 抛出异常回滚了它自己的事务，PROCESSING 记录仍然保留在数据库中，
      * 并且会被 markFailed 正确标记为 FAILED，不会产生"孤魂野鬼"记录。
+     *
+     * 特殊场景 - 乐观锁冲突（OptimisticLockingFailureException）：
+     *   当业务因乐观锁失败时，不标记 FAILED，而是删除幂等记录和 Redis key。
+     *   这样 @Retryable 重试时能从头开始重新执行业务，真正实现"乐观锁冲突后自动重试恢复"。
      *
      * Redis 层是第一道快速防线，DB 唯一约束是第二道兜底防线。
      * DB 是权威状态源，Redis 是缓存。先写 DB，后写 Redis 保持一致性。
@@ -87,8 +92,18 @@ public class InventoryIdempotencyExecutor {
             // DB 是权威，先写 DB，再同步 Redis
             inventoryOperationService.markSuccess(orderId, operationType);
             this.setRedisStatus(IDEM_OPEA_KET, OperationStatus.SUCCESS);
+        } catch (OptimisticLockingFailureException e) {
+            // 乐观锁冲突：删除幂等记录 + Redis key，让 @Retryable 重试时重新执行业务
+            // 不是真的失败 不得 markfailed
+            try {
+                inventoryOperationService.deleteOperation(orderId, operationType);
+                stringRedisTemplate.delete(IDEM_OPEA_KET);
+            } catch (Exception ignored) {
+                // 删除操作的异常不应掩盖原始乐观锁异常
+            }
+            throw e;
         } catch (Exception e) {
-            // 捕获所有异常，确保 PROCESSING → FAILED 转换一定被执行
+            // 其他业务异常：PROCESSING → FAILED 转换
             try {
                 inventoryOperationService.markFailed(orderId, operationType);
                 this.setRedisStatus(IDEM_OPEA_KET, OperationStatus.FAILED);
