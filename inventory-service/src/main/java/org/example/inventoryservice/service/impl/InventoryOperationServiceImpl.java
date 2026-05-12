@@ -54,4 +54,10 @@ public class InventoryOperationServiceImpl implements InventoryOperationService 
         // must save now
         inventoryOperationRepository.saveAndFlush(inventoryOperation);
     }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void deleteOperation(Long orderId, OperationType operationType){
+        inventoryOperationRepository.deleteByOrderIdAndOperationType(orderId, operationType);
+    }
 }
