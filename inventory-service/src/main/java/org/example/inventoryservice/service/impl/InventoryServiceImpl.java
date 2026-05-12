@@ -43,6 +43,10 @@ public class InventoryServiceImpl implements InventoryService {
 
         // no need to save()
         // because jpa can auto flush when transition was submitted
+//        find...() 查出来的 Inventory 是 Managed Entity + persistent state（托管状态）
+//        Spring Data JPA 默认在事务中开启 dirty checking（脏检查）
+//        事务提交时 Hibernate 会自动：
+//        检测 entity 是否变更 → 自动生成 update SQL
 
     }
 

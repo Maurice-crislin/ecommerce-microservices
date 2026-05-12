@@ -27,4 +27,10 @@ public class Product {
     @Column(nullable = false)
     private ProductStatus status;
 
+    @PrePersist
+    public void prePersist() {
+        if (status == null) {
+            status = ProductStatus.ACTIVE;
+        }
+    }
 }

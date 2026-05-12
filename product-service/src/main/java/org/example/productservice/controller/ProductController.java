@@ -69,18 +69,27 @@ public class ProductController {
         try {
             productService.deleteProduct(productCode);
             return ResponseEntity.noContent().build(); // 204  no content
-        } catch (IllegalArgumentException e) {
+        } catch (Exception e) {
             return ResponseEntity.notFound().build(); // 404 not found
         }
     }
 
     @PostMapping("/add")
     public ResponseEntity<ProductResponse> addProduct(@Valid @RequestBody ProductCreateRequest productCreateRequest){
-        return ResponseEntity.ok(productService.addProduct(productCreateRequest));
+        try {
+            return ResponseEntity.ok(productService.addProduct(productCreateRequest));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
     }
 
     @PostMapping("/update/{productCode}")
     public ResponseEntity<ProductResponse> updateProduct(@PathVariable(name = "productCode") Long productCode, @RequestBody @Valid ProductUpdateRequest productUpdateRequest){
-        return ResponseEntity.ok(productService.updateProduct(productCode, productUpdateRequest));
+        try {
+            ProductResponse productResponse = productService.updateProduct(productCode, productUpdateRequest);
+            return ResponseEntity.ok(productResponse);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
     }
 }
