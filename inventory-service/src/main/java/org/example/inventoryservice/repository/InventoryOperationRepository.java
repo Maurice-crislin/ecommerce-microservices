@@ -11,5 +11,6 @@ public interface InventoryOperationRepository extends JpaRepository<InventoryOpe
 
     boolean existsByOrderIdAndOperationType(Long orderId, OperationType operationType);
     Optional<InventoryOperation> findByOrderIdAndOperationType(Long orderId, OperationType operationType);
+    void deleteByOrderIdAndOperationType(Long orderId, OperationType operationType);
 }
 
