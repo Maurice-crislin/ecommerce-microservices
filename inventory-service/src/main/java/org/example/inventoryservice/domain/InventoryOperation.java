@@ -33,9 +33,6 @@ public class InventoryOperation {
     @NotNull
     private LocalDateTime updatedAt;
 
-    @Version
-    /* optimistic locking*/
-    private  Long version;
 
     private InventoryOperation(Long orderId, OperationType operationType) {
         this.orderId = orderId;
