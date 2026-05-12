@@ -1,6 +1,7 @@
 package org.example.productservice.service.impl;
 
 
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.example.productservice.cache.ProductBloomFilter;
 import org.example.productservice.dto.*;
@@ -107,7 +108,7 @@ public class ProductServiceImpl implements ProductService {
         Boolean locked = redisTemplate.opsForValue().setIfAbsent(lockKey,"1",20,TimeUnit.SECONDS);
 
         if(Boolean.TRUE.equals(locked)){
-            // 获得锁
+            // 获得锁的才能去db查,防止Hotspot Invalid (某热点key失效,大量相同请求达到db)
             try {
                 // 1.Double-Check: 重复查一次redis,也许在等待锁的过程中,redis被写入值了
                 product = this.tryGetProductFromRedis(cacheKey);
@@ -270,17 +271,20 @@ public class ProductServiceImpl implements ProductService {
                 product.getStatus()
         );
     }
+    @Transactional
     @Override
     public void deleteProduct(Long productCode) {
         String cacheKey = PRODUCT_DETAIL_PREFIX + productCode;
 
-
+        // 先检查商品是否存在 不存在直接退出 不用删除redis缓存
+        Product product = productRepository.findProductByProductCode(productCode)
+                .orElseThrow(() -> new IllegalArgumentException("Product not found: " + productCode));
 
         // 第一次删除缓存
         redisTemplate.delete(cacheKey);
 
         // 再删db
-        productRepository.deleteById(productCode);
+        productRepository.delete(product);
 
         this.sleep(CACHE_DELETE_SLEEP_MS);
         // 第二次删除缓存（确保清空可能被并发读线程写入的旧数据）
@@ -289,17 +293,27 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public ProductResponse addProduct(ProductCreateRequest productCreateRequest){
+        // 使用时间戳生成唯一商品编码
+        long productCode = System.currentTimeMillis();
         Product product = new Product();
+        product.setProductCode(productCode);
         product.setProductName(productCreateRequest.getProductName());
         product.setPrice(productCreateRequest.getPrice());
         Product savedProduct = productRepository.save(product);
+
+        // 将新商品编码加入布隆过滤器，防止后续查询误判为不存在
+        productBloomFilter.add(savedProduct.getProductCode());
 
         return  mapToProductResponse(savedProduct);
     }
 
     /**
      * 先查 → 再改 → 再存 → 再转 DTO
+     * transition不影响功能
+     * 有 @Transactional → Product保持Persistent，save()只flush（直接UPDATE）。差别就是少一次 SELECT，性能更好
+     * 无 @Transactional → Product变成Detached，save()走merge（先SELECT再UPDATE）。
      */
+    @Transactional
     @Override
     public ProductResponse updateProduct(Long productCode, ProductUpdateRequest productUpdateRequest){
         String cacheKey = PRODUCT_DETAIL_PREFIX + productCode;
@@ -310,6 +324,7 @@ public class ProductServiceImpl implements ProductService {
             product.setPrice(productUpdateRequest.getPrice());
         }
 
+        // 先删缓存 → 再写DB → sleep → 再删缓存
         // 第一次删除缓存
         redisTemplate.delete(cacheKey);
 
