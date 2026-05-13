@@ -83,7 +83,7 @@ public class InventoryServiceImpl implements InventoryService {
 
         for(StockRequest stockRequest : stockRequestList){
             Inventory inventory = inventoryMap.get(stockRequest.getProductCode());
-            if(inventory == null || inventory.getAvailableStock() < stockRequest.getQuantity()){
+            if(inventory == null || inventory.getOnHandStock() < stockRequest.getQuantity()){
                 failedProductCodes.add(stockRequest.getProductCode());
             }
         }
