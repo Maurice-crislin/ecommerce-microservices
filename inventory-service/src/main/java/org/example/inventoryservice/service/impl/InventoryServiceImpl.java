@@ -33,59 +33,60 @@ public class InventoryServiceImpl implements InventoryService {
     @Transactional
     // admin
     public void deductStockDirectly(Long productCode, Integer quantity) {
-        // 1. 先查 DB 校验
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero");
+        }
         Inventory inventory = inventoryRepository.findInventoryByProductCode(productCode)
                 .orElseThrow(()-> new IllegalArgumentException("Product not found"));
 
-
-        // 2. 先操作 Redis（如果 Redis 失败，DB 不会被执行）
-        String availableStock = RedisKeys.availableStockKey(productCode);
-        stringRedisTemplate.opsForValue().decrement(availableStock,quantity);
-
-        // 3. Redis 成功后，再操作 DB
+        // 1. DB（@Transactional 保护，失败自动回滚）
         inventory.deductStock(quantity);
-
         InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_DEDUCT);
         inventoryLogRepository.save(inventoryLog);
-        // no need to save()
-        // Spring Data JPA 默认在事务中开启 dirty checking（脏检查）
-        // 事务提交时 Hibernate 会自动：
-        // 检测 entity 是否变更 → 自动生成 update SQL
+
+        // 2. Redis（DB 已成功，@Transactional 会提交；Redis 失败则回滚 DB）
+        String availableStock = RedisKeys.availableStockKey(productCode);
+        stringRedisTemplate.opsForValue().decrement(availableStock,quantity);
     }
 
     @Override
     @Transactional
     // admin
     public void addStock(Long productCode, Integer quantity) {
-        // 1. 先查 DB 校验
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero");
+        }
         Inventory inventory = inventoryRepository.findInventoryByProductCode(productCode)
                 .orElseThrow(()-> new IllegalArgumentException("Product not found"));
 
-        // 2.先操作 Redis（如果 Redis 失败，DB 不会被执行）
+        // 1. DB（@Transactional 保护，失败自动回滚）
+        inventory.increaseStock(quantity);
+        InventoryLog inventoryLog = new InventoryLog(productCode, quantity, null, OperationType.MANUAL_ADD);
+        inventoryLogRepository.save(inventoryLog);
+
+        // 2. Redis（DB 已成功，@Transactional 会提交；Redis 失败则回滚 DB）
         String availableStock = RedisKeys.availableStockKey(productCode);
         stringRedisTemplate.opsForValue().increment(availableStock,quantity);
-
-        // 3. Redis 成功后，再操作 DB
-        inventory.increaseStock(quantity);
-        InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_ADD);
-        inventoryLogRepository.save(inventoryLog);
     }
     @Override
     @Transactional
     public void createStock(Long productCode, Integer quantity) {
-        // 1. 先查 DB 校验
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero");
+        }
         if(inventoryRepository.existsByProductCode(productCode)){
             throw new IllegalArgumentException("Product already exists");
         }
-        // 2.先操作 Redis（如果 Redis 失败，DB 不会被执行）
-        String availableStockKey = RedisKeys.availableStockKey(productCode);
-        stringRedisTemplate.opsForValue().set(availableStockKey,String.valueOf(quantity));
 
-        // 3. Redis 成功后，再操作 DB
+        // 1. DB（@Transactional 保护，失败自动回滚）
         Inventory inventory = new Inventory(productCode, quantity);
         inventoryRepository.save(inventory);
         InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_CREATE);
         inventoryLogRepository.save(inventoryLog);
+
+        // 2. Redis（DB 已成功，@Transactional 会提交；Redis 失败则回滚 DB）
+        String availableStockKey = RedisKeys.availableStockKey(productCode);
+        stringRedisTemplate.opsForValue().set(availableStockKey,String.valueOf(quantity));
     }
 
     @Override

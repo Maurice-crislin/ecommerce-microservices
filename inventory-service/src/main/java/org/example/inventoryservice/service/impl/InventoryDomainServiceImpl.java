@@ -44,31 +44,50 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
 
         Map<Long,Inventory> inventoryMap = inventoryList.stream().collect(Collectors.toMap(Inventory::getProductCode,inv->inv));
 
+        List<StockRequest> lockedSuccessfully = new ArrayList<>();
         List<InventoryLog> logList = new ArrayList<>();
 
-        for(StockRequest stockRequest : stockRequestList){
-            Long productCode = stockRequest.getProductCode();
-            Integer quantity = stockRequest.getQuantity();
+        try {
+            for (StockRequest stockRequest : stockRequestList) {
+                Long productCode = stockRequest.getProductCode();
+                Integer quantity = stockRequest.getQuantity();
 
-            Inventory inventory = inventoryMap.get(productCode);
-            if(inventory == null){
-                throw new IllegalArgumentException("Product not found" + productCode);
+                Inventory inventory = inventoryMap.get(productCode);
+                if (inventory == null) {
+                    throw new IllegalArgumentException("Product not found" + productCode);
+                }
+
+                // redis lua avail-- locked++
+                Long result = stringRedisTemplate.execute(lockScript,
+                        List.of(RedisKeys.availableStockKey(productCode), RedisKeys.lockedStockKey(productCode))
+                        , quantity);
+
+                if (result == 0) {
+                    throw new IllegalArgumentException("Insufficient stock for product: " + productCode);
+                }
+
+                lockedSuccessfully.add(stockRequest);
+                InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.LOCK);
+                logList.add(inventoryLog);
             }
 
-            // redis lua avail-- locked++
-            Long result = stringRedisTemplate.execute(lockScript,
-                    List.of(RedisKeys.availableStockKey(productCode),RedisKeys.lockedStockKey(productCode))
-                    ,quantity);
+            inventoryLogRepository.saveAll(logList);
 
-            if(result == 0){
-                throw new IllegalArgumentException("Insufficient stock for product: " + productCode);
+        } catch (Exception e) {
+            // 回滚已成功的 Redis 操作：avail++, locked--
+            for (StockRequest req : lockedSuccessfully) {
+                try {
+                    stringRedisTemplate.opsForValue().increment(
+                            RedisKeys.availableStockKey(req.getProductCode()), req.getQuantity());
+                    stringRedisTemplate.opsForValue().decrement(
+                            RedisKeys.lockedStockKey(req.getProductCode()), req.getQuantity());
+                } catch (Exception ignored) {
+                    // 回滚失败不应掩盖原始异常
+                }
             }
-
-            InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.LOCK);
-            logList.add(inventoryLog);
+            // DB 由 @Transactional 自动回滚
+            throw e;
         }
-
-        inventoryLogRepository.saveAll(logList);
     }
     @Override
     @Transactional
@@ -81,31 +100,48 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
 
         Map<Long,Inventory> inventoryMap = inventoryList.stream().collect(Collectors.toMap(Inventory::getProductCode, inv->inv));
 
+        List<StockRequest> confirmedSuccessfully = new ArrayList<>();
         List<InventoryLog> logList = new ArrayList<>();
 
-        for(StockRequest stockRequest : stockRequestList){
-            Long productCode = stockRequest.getProductCode();
-            Integer quantity = stockRequest.getQuantity();
+        try {
+            for (StockRequest stockRequest : stockRequestList) {
+                Long productCode = stockRequest.getProductCode();
+                Integer quantity = stockRequest.getQuantity();
 
-            Inventory inventory = inventoryMap.get(productCode);
-            if(inventory == null) throw new IllegalArgumentException("Product not found: " + productCode);
-            // db onhand-- sold++
-            inventory.confirmSale(quantity);
+                Inventory inventory = inventoryMap.get(productCode);
+                if (inventory == null) throw new IllegalArgumentException("Product not found: " + productCode);
+                // db onhand-- sold++
+                inventory.confirmSale(quantity);
 
-            // redis lua locked--
-            Long result = stringRedisTemplate.execute(confirmScript,
-                    List.of(RedisKeys.lockedStockKey(productCode))
-                    ,quantity);
+                // redis lua locked--
+                Long result = stringRedisTemplate.execute(confirmScript,
+                        List.of(RedisKeys.lockedStockKey(productCode))
+                        , quantity);
 
-            if(result == 0){
-                throw new IllegalArgumentException("Confirm failed: insufficient locked stock for product: " + productCode);
+                if (result == 0) {
+                    throw new IllegalArgumentException("Confirm failed: insufficient locked stock for product: " + productCode);
+                }
+
+                confirmedSuccessfully.add(stockRequest);
+                InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.CONFIRM);
+                logList.add(inventoryLog);
             }
 
-            InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.CONFIRM);
-            logList.add(inventoryLog);
-        }
+            inventoryLogRepository.saveAll(logList);
 
-        inventoryLogRepository.saveAll(logList);
+        } catch (Exception e) {
+            // 回滚已成功的 Redis 操作：locked++
+            for (StockRequest req : confirmedSuccessfully) {
+                try {
+                    stringRedisTemplate.opsForValue().increment(
+                            RedisKeys.lockedStockKey(req.getProductCode()), req.getQuantity());
+                } catch (Exception ignored) {
+                    // 回滚失败不应掩盖原始异常
+                }
+            }
+            // DB 由 @Transactional 自动回滚
+            throw e;
+        }
     }
     @Override
     @Transactional
@@ -117,28 +153,47 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
 
         Map<Long,Inventory> inventoryMap = inventoryList.stream().collect(Collectors.toMap(Inventory::getProductCode,inv->inv));
 
+        List<StockRequest> unlockedSuccessfully = new ArrayList<>();
         List<InventoryLog> logList = new ArrayList<>();
 
-        for(StockRequest stockRequest : stockRequestList){
-            Long productCode = stockRequest.getProductCode();
-            Integer quantity = stockRequest.getQuantity();
+        try {
+            for (StockRequest stockRequest : stockRequestList) {
+                Long productCode = stockRequest.getProductCode();
+                Integer quantity = stockRequest.getQuantity();
 
-            Inventory inventory = inventoryMap.get(productCode);
-            if(inventory == null) throw new IllegalArgumentException("Product not found: " + productCode);
+                Inventory inventory = inventoryMap.get(productCode);
+                if (inventory == null) throw new IllegalArgumentException("Product not found: " + productCode);
 
-            // redis lua avail++ locked--
-            Long result = stringRedisTemplate.execute(unlockScript,
-                    List.of(RedisKeys.availableStockKey(productCode),RedisKeys.lockedStockKey(productCode))
-                    ,quantity);
+                // redis lua avail++ locked--
+                Long result = stringRedisTemplate.execute(unlockScript,
+                        List.of(RedisKeys.availableStockKey(productCode), RedisKeys.lockedStockKey(productCode))
+                        , quantity);
 
-            if(result == 0){
-                throw new IllegalArgumentException("Unlock failed: insufficient locked stock for product:  " + productCode);
+                if (result == 0) {
+                    throw new IllegalArgumentException("Unlock failed: insufficient locked stock for product:  " + productCode);
+                }
+
+                unlockedSuccessfully.add(stockRequest);
+                InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.UNLOCK);
+                logList.add(inventoryLog);
             }
 
-            InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.UNLOCK);
-            logList.add(inventoryLog);
-        }
+            inventoryLogRepository.saveAll(logList);
 
-        inventoryLogRepository.saveAll(logList);
+        } catch (Exception e) {
+            // 回滚已成功的 Redis 操作：avail--, locked++
+            for (StockRequest req : unlockedSuccessfully) {
+                try {
+                    stringRedisTemplate.opsForValue().decrement(
+                            RedisKeys.availableStockKey(req.getProductCode()), req.getQuantity());
+                    stringRedisTemplate.opsForValue().increment(
+                            RedisKeys.lockedStockKey(req.getProductCode()), req.getQuantity());
+                } catch (Exception ignored) {
+                    // 回滚失败不应掩盖原始异常
+                }
+            }
+            // DB 由 @Transactional 自动回滚
+            throw e;
+        }
     }
 }
