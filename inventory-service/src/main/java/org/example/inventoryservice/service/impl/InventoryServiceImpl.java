@@ -2,20 +2,14 @@ package org.example.inventoryservice.service.impl;
 
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
-import org.example.inventoryservice.exception.OperationProcessingException;
+import org.example.inventoryservice.domain.*;
+import org.example.inventoryservice.repository.InventoryLogRepository;
 import org.example.inventoryservice.service.InventoryIdempotencyExecutor;
 import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.example.inventoryservice.domain.Inventory;
-import org.example.inventoryservice.domain.InventoryOperation;
-import org.example.inventoryservice.domain.OperationStatus;
-import org.example.inventoryservice.domain.OperationType;
-import org.example.inventoryservice.repository.InventoryOperationRepository;
 import org.example.inventoryservice.repository.InventoryRepository;
 import org.example.inventoryservice.service.InventoryDomainService;
-import org.example.inventoryservice.service.InventoryOperationService;
 import org.example.inventoryservice.service.InventoryService;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -28,8 +22,8 @@ import java.util.stream.Collectors;
 public class InventoryServiceImpl implements InventoryService {
 
     private final InventoryRepository inventoryRepository;
-    private final InventoryOperationService inventoryOperationService;
     private final InventoryDomainService inventoryDomainService;
+    private final InventoryLogRepository  inventoryLogRepository;
     private final InventoryIdempotencyExecutor inventoryIdempotencyExecutor;
 
     @Override
@@ -42,12 +36,11 @@ public class InventoryServiceImpl implements InventoryService {
         inventory.deductStock(quantity);
 
         // no need to save()
-        // because jpa can auto flush when transition was submitted
-//        find...() 查出来的 Inventory 是 Managed Entity + persistent state（托管状态）
-//        Spring Data JPA 默认在事务中开启 dirty checking（脏检查）
-//        事务提交时 Hibernate 会自动：
-//        检测 entity 是否变更 → 自动生成 update SQL
-
+        // Spring Data JPA 默认在事务中开启 dirty checking（脏检查）
+        // 事务提交时 Hibernate 会自动：
+        // 检测 entity 是否变更 → 自动生成 update SQL
+        InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_DEDUCT);
+        inventoryLogRepository.save(inventoryLog);
     }
 
     @Override
@@ -58,7 +51,23 @@ public class InventoryServiceImpl implements InventoryService {
                 .orElseThrow(()-> new IllegalArgumentException("Product not found"));
         inventory.increaseStock(quantity);
 
+        InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_ADD);
+        inventoryLogRepository.save(inventoryLog);
     }
+    @Override
+    @Transactional
+    public void createStock(Long productCode, Integer quantity) {
+        if(inventoryRepository.existsByProductCode(productCode)){
+            throw new IllegalArgumentException("Product already exists");
+        }
+
+        Inventory inventory = new Inventory(productCode, quantity);
+        inventoryRepository.save(inventory);
+
+        InventoryLog inventoryLog = new InventoryLog(productCode,quantity,null,OperationType.MANUAL_CREATE);
+        inventoryLogRepository.save(inventoryLog);
+    }
+
     @Override
     // just check, no deduct/lock
     public List<Long> batchCheckStock(List<StockRequest> stockRequestList) {
@@ -83,33 +92,36 @@ public class InventoryServiceImpl implements InventoryService {
 
 
 
-    // 没有retry设置,客户端接到500之后自行决定重试
+    // api调用 没有retry设置,客户端接到500之后自行决定重试
     @Override
     public void batchLockStockWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
+        Long orderId = inventoryBatchRequest.getOrderId();
         inventoryIdempotencyExecutor.executeWithIdempotency(
                 inventoryBatchRequest.getOrderId(),
                 OperationType.LOCK,
-                () ->inventoryDomainService.batchLockStock(inventoryBatchRequest.getStockRequestList())
+                () ->inventoryDomainService.batchLockStock(orderId,inventoryBatchRequest.getStockRequestList())
         );
     }
 
 
-    // RabbitMQ + @Retryable
+    // RabbitMQ调用 + @Retryable
     @Override
     public void batchConfirmSaleWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
+        Long orderId = inventoryBatchRequest.getOrderId();
         inventoryIdempotencyExecutor.executeWithIdempotency(
-                inventoryBatchRequest.getOrderId(),
+                orderId,
                 OperationType.CONFIRM,
-                () ->inventoryDomainService.batchConfirmSale(inventoryBatchRequest.getStockRequestList())
+                () ->inventoryDomainService.batchConfirmSale(orderId,inventoryBatchRequest.getStockRequestList())
         );
     }
-    // RabbitMQ + @Retryable
+    // RabbitMQ调用 + @Retryable
     @Override
     public void batchUnlockStockWithIdempotency(InventoryBatchRequest inventoryBatchRequest){
+        Long orderId = inventoryBatchRequest.getOrderId();
         inventoryIdempotencyExecutor.executeWithIdempotency(
                 inventoryBatchRequest.getOrderId(),
                 OperationType.UNLOCK,
-                () ->inventoryDomainService.batchUnlockStock(inventoryBatchRequest.getStockRequestList())
+                () ->inventoryDomainService.batchUnlockStock(orderId,inventoryBatchRequest.getStockRequestList())
         );
     }
 }

@@ -41,4 +41,15 @@ public class AdminInventoryController {
                 )
         );
     }
+    @PostMapping("/create")
+    // POST /admin/inventories/create
+    public ResponseEntity<SimpleResponse<Object>> createStock(@RequestBody @Valid StockRequest request){
+        // 200
+        inventoryService.createStock(request.getProductCode(), request.getQuantity());
+        return ResponseEntity.ok(
+                new SimpleResponse<>(
+                        true, "stock has been successfully inserted"
+                )
+        );
+    }
 }

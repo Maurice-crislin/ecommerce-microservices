@@ -8,6 +8,7 @@ import java.util.List;
 public interface InventoryService {
     void deductStockDirectly(Long productCode, Integer quantity);
     void addStock(Long productCode, Integer quantity);
+    void createStock(Long productCode, Integer quantity);
     List<Long> batchCheckStock(List<StockRequest> stockRequestList);
     void batchLockStockWithIdempotency(InventoryBatchRequest inventoryBatchEvent);
     void batchConfirmSaleWithIdempotency(InventoryBatchRequest inventoryBatchEvent);
