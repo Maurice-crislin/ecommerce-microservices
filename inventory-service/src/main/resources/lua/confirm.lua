@@ -1,7 +1,7 @@
 
 local locked = redis.call('GET', KEYS[1]) or 0
 locked = tonumber(locked)
-quantity = tonumber(ARGV[1])
+local quantity = tonumber(ARGV[1])
 
 if locked < quantity then
     return 0
