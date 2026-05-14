@@ -10,8 +10,10 @@ import org.example.inventoryservice.domain.InventoryLog;
 import org.example.inventoryservice.domain.OperationType;
 import org.example.inventoryservice.dto.SimpleResponse;
 import org.example.inventoryservice.repository.InventoryLogRepository;
+import org.example.inventoryservice.repository.InventoryOperationRepository;
 import org.example.inventoryservice.repository.InventoryRepository;
 import org.example.inventoryservice.service.InventoryDomainService;
+import org.example.inventoryservice.service.InventoryIdempotencyExecutor;
 import org.example.inventoryservice.service.InventoryService;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -57,8 +60,19 @@ public class InventoryLogApiTests {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
+    @Autowired
+    private InventoryOperationRepository inventoryOperationRepository;
+
     @BeforeEach
     void setUp() {
+        // Clean Redis idempotency keys
+        Set<String> idemKeys = stringRedisTemplate.keys(InventoryIdempotencyExecutor.IDEM_PREFIX + "*");
+        if (idemKeys != null) stringRedisTemplate.delete(idemKeys);
+        // Clean Redis stock keys
+        Set<String> stockKeys = stringRedisTemplate.keys("inventory:stock:*");
+        if (stockKeys != null) stringRedisTemplate.delete(stockKeys);
+
+        inventoryOperationRepository.deleteAll();
         inventoryLogRepository.deleteAll();
         inventoryRepository.deleteAll();
 
