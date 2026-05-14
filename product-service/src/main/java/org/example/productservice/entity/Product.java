@@ -27,6 +27,17 @@ public class Product {
     @Column(nullable = false)
     private ProductStatus status;
 
+    // 添加级联操作，这样保存 Product 时会自动保存/更新 ProductDetail
+    @OneToOne(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private ProductDetail productDetail;
+
+    public void setProductDetail(ProductDetail productDetail) {
+        if (productDetail != null) {
+            this.productDetail = productDetail;
+            this.productDetail.setProduct(this);
+        }
+    }
+
     @PrePersist
     public void prePersist() {
         if (status == null) {

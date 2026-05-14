@@ -22,12 +22,8 @@ public class ProductController {
      */
     @GetMapping("/{productCode}")
     public ResponseEntity<ProductPriceResponse>getProductPrice(@PathVariable(name = "productCode") Long productCode){
-        try {
-            ProductPriceResponse productPriceResponse = productService.getProductPrice(productCode);
-            return ResponseEntity.ok(productPriceResponse);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build(); // 返回 404
-        }
+        ProductPriceResponse productPriceResponse = productService.getProductPrice(productCode);
+        return ResponseEntity.ok(productPriceResponse);
     }
 
     /**
@@ -64,32 +60,32 @@ public class ProductController {
         }
         return ResponseEntity.ok(productService.getBatchProductPrices(productCodes));
     }
-    @PostMapping("/delete/{productCode}")
+    /**
+     * 删除商品（级联删除 Detail）
+     * Delete /products/{productCode}
+     */
+    @DeleteMapping("/{productCode}")
     public ResponseEntity<Void> deleteProduct(@PathVariable(name = "productCode") Long productCode){
-        try {
-            productService.deleteProduct(productCode);
-            return ResponseEntity.noContent().build(); // 204  no content
-        } catch (Exception e) {
-            return ResponseEntity.notFound().build(); // 404 not found
-        }
+        productService.deleteProduct(productCode);
+        return ResponseEntity.noContent().build(); // 204  no content
     }
 
-    @PostMapping("/add")
+    /**
+     * 创建商品（同时创建 Product 和 ProductDetail）
+     * POST /products
+     */
+    @PostMapping
     public ResponseEntity<ProductResponse> addProduct(@Valid @RequestBody ProductCreateRequest productCreateRequest){
-        try {
-            return ResponseEntity.ok(productService.addProduct(productCreateRequest));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().build();
-        }
+        return ResponseEntity.ok(productService.addProduct(productCreateRequest));
     }
-
-    @PostMapping("/update/{productCode}")
+    /**
+     * 更新商品（同时更新两张表）
+     * PUT /products/{productCode}
+     */
+    @PutMapping("/{productCode}")
     public ResponseEntity<ProductResponse> updateProduct(@PathVariable(name = "productCode") Long productCode, @RequestBody @Valid ProductUpdateRequest productUpdateRequest){
-        try {
-            ProductResponse productResponse = productService.updateProduct(productCode, productUpdateRequest);
-            return ResponseEntity.ok(productResponse);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
-        }
+
+        ProductResponse productResponse = productService.updateProduct(productCode, productUpdateRequest);
+        return ResponseEntity.ok(productResponse);
     }
 }

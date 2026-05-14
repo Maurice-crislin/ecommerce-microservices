@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.example.productservice.cache.ProductBloomFilter;
 import org.example.productservice.dto.*;
 import org.example.productservice.entity.Product;
+import org.example.productservice.entity.ProductDetail;
 import org.example.productservice.enums.ProductStatus;
 import org.example.productservice.repository.ProductRepository;
 import org.example.productservice.service.ProductService;
@@ -132,8 +133,10 @@ public class ProductServiceImpl implements ProductService {
 
                 product = optionalProduct.get();
 
-                // 3.db查到了,回写redis
-                this.setRedisKV(cacheKey, product,cacheTtl, TimeUnit.MILLISECONDS);
+                ProductCache productCache = mapToProductCache(product);
+
+                // 3.db查到了,把不含detail的数据 回写redis
+                this.setRedisKV(cacheKey, product, cacheTtl, TimeUnit.MILLISECONDS);
 
 
                 return mapToProductPriceResponse(product);
@@ -283,7 +286,7 @@ public class ProductServiceImpl implements ProductService {
         // 第一次删除缓存
         redisTemplate.delete(cacheKey);
 
-        // 再删db
+        // 再删db (配置了 CascadeType.REMOVE，这里一删，两张表都删了)
         productRepository.delete(product);
 
         this.sleep(CACHE_DELETE_SLEEP_MS);
@@ -295,10 +298,22 @@ public class ProductServiceImpl implements ProductService {
     public ProductResponse addProduct(ProductCreateRequest productCreateRequest){
         // 使用时间戳生成唯一商品编码
         long productCode = System.currentTimeMillis();
+        // 主表
         Product product = new Product();
         product.setProductCode(productCode);
         product.setProductName(productCreateRequest.getProductName());
         product.setPrice(productCreateRequest.getPrice());
+
+        // detail表
+        ProductDetail detail = new ProductDetail();
+        detail.setBrand(productCreateRequest.getBrand());
+        detail.setCategoryCode(productCreateRequest.getCategoryCode());
+        detail.setDescription(productCreateRequest.getDescription());
+
+        // 建立双向关联
+        product.setProductDetail(detail);
+
+        // 保存
         Product savedProduct = productRepository.save(product);
 
         // 将新商品编码加入布隆过滤器，防止后续查询误判为不存在
@@ -324,11 +339,26 @@ public class ProductServiceImpl implements ProductService {
             product.setPrice(productUpdateRequest.getPrice());
         }
 
+        ProductDetail detail = new ProductDetail();
+
+        if(detail != null){
+            if(productUpdateRequest.getBrand() != null){
+                detail.setBrand(productUpdateRequest.getBrand());
+            }
+            if(productUpdateRequest.getCategoryCode() != null){
+                detail.setCategoryCode(productUpdateRequest.getCategoryCode());
+            }
+            if(productUpdateRequest.getDescription() != null){
+                detail.setDescription(productUpdateRequest.getDescription());
+            }
+        }
+
+
         // 先删缓存 → 再写DB → sleep → 再删缓存
         // 第一次删除缓存
         redisTemplate.delete(cacheKey);
 
-        // 再改db
+        // 再改db 两张表都更新了
         Product savedProduct = productRepository.save(product);
 
         this.sleep(CACHE_DELETE_SLEEP_MS);
@@ -338,12 +368,24 @@ public class ProductServiceImpl implements ProductService {
         return  mapToProductResponse(savedProduct);
     }
 
+    private ProductCache mapToProductCache(Product product){
+        return new ProductCache(
+                product.getProductCode(),
+                product.getProductName(),
+                product.getPrice(),
+                product.getStatus()
+        );
+    }
+
     private ProductResponse mapToProductResponse(Product product){
         return new ProductResponse(
                 product.getProductCode(),
                 product.getProductName(),
                 product.getPrice(),
-                product.getStatus()
+                product.getStatus(),
+                product.getProductDetail().getBrand(),
+                product.getProductDetail().getDescription(),
+                product.getProductDetail().getCategoryCode()
         );
     }
 
