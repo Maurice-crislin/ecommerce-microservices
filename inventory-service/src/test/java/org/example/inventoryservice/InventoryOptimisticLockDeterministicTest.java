@@ -1,6 +1,7 @@
 package org.example.inventoryservice;
 
 import lombok.SneakyThrows;
+import org.example.inventoryservice.config.RedisKeys;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.domain.InventoryOperation;
 import org.example.inventoryservice.domain.OperationStatus;
@@ -62,6 +63,11 @@ public class InventoryOptimisticLockDeterministicTest {
         if (keys != null && !keys.isEmpty()) {
             stringRedisTemplate.delete(keys);
         }
+        // Clean Redis stock keys
+        Set<String> stockKeys = stringRedisTemplate.keys("inventory:stock:*");
+        if (stockKeys != null && !stockKeys.isEmpty()) {
+            stringRedisTemplate.delete(stockKeys);
+        }
         inventoryOperationRepository.deleteAll();
         inventoryRepository.deleteAll();
         inventoryOperationRepository.flush();
@@ -102,8 +108,8 @@ public class InventoryOptimisticLockDeterministicTest {
         // ✅ 库存不受影响
         Inventory inv = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inv.getLockedStock()).as("T1: 库存未锁定").isZero();
-        assertThat(inv.getAvailableStock()).as("T1: 库存未变").isEqualTo(INITIAL_STOCK);
+        assertThat(inv.getOnHandStock()).as("T1: 库存未变").isEqualTo(INITIAL_STOCK);
+        assertThat(inv.getSoldStock()).as("T1: soldStock未变").isZero();
     }
 
     // ==================================================================
@@ -139,8 +145,8 @@ public class InventoryOptimisticLockDeterministicTest {
 
     // ==================================================================
     //  T3: 连续 5 次抛 OptimisticLock → 第 6 次执行业务成功
-    //  用 for 循环手动控制重试次数，每次重新调用 executor
-    //  改用 AtomicInteger 在线程间传递尝试次数，避免 lambda 捕获普通变量问题
+    //  在 new schema 中，LOCK 只操作 Redis，batchLogic 用 confirmSale()
+    //  模拟一个会修改 DB + 触发乐观锁版本冲突的业务操作
     // ==================================================================
     @Test
     @DisplayName("T3: 连续5次OptimisticLock→第6次手动重试执行业务成功")
@@ -165,7 +171,8 @@ public class InventoryOptimisticLockDeterministicTest {
                     Inventory inv = inventoryRepository
                             .findInventoryByProductCode(PRODUCT_CODE)
                             .orElseThrow(() -> new RuntimeException("库存不存在"));
-                    inv.lock(10);
+                    // confirmSale 会修改 DB (onHandStock--, soldStock++), 触发乐观锁版本号变更
+                    inv.confirmSale(10);
                     inventoryRepository.save(inv);
                 };
             }
@@ -198,11 +205,11 @@ public class InventoryOptimisticLockDeterministicTest {
                 .as("T3: Redis 应为SUCCESS")
                 .isEqualTo(OperationStatus.SUCCESS.name());
 
-        // ✅ 库存锁定 10 件
+        // ✅ 库存通过 confirmSale 修改了 10 件
         Inventory inv = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inv.getLockedStock()).as("T3: 库存锁定10件").isEqualTo(10);
-        assertThat(inv.getAvailableStock()).as("T3: 可用库存90").isEqualTo(INITIAL_STOCK - 10);
+        assertThat(inv.getSoldStock()).as("T3: soldStock=10").isEqualTo(10);
+        assertThat(inv.getOnHandStock()).as("T3: onHandStock=90").isEqualTo(INITIAL_STOCK - 10);
     }
 
     // ==================================================================
@@ -223,11 +230,11 @@ public class InventoryOptimisticLockDeterministicTest {
                 try {
                     startLatch.await();
                     executor.executeWithIdempotency(orderId, OperationType.LOCK, () -> {
-                        // 直接操作 Repository，不嵌套调用 executor
+                        // confirmSale simulates a business write to DB
                         Inventory inv = inventoryRepository
                                 .findInventoryByProductCode(PRODUCT_CODE)
                                 .orElseThrow(() -> new RuntimeException("库存不存在"));
-                        inv.lock(10);
+                        inv.confirmSale(10);
                         inventoryRepository.save(inv);
                     });
                 } catch (Exception e) {
@@ -251,11 +258,14 @@ public class InventoryOptimisticLockDeterministicTest {
                 .as("T4: 幂等记录应为SUCCESS")
                 .isEqualTo(OperationStatus.SUCCESS);
 
-        // 库存只锁定一次(10件)
+        // 库存只通过 confirmSale 修改一次 (10件)
         Inventory inv = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inv.getLockedStock())
-                .as("T4: 库存锁定10件(仅一次)")
+        assertThat(inv.getSoldStock())
+                .as("T4: soldStock=10(仅一次)")
                 .isEqualTo(10);
+        assertThat(inv.getOnHandStock())
+                .as("T4: onHandStock=90(仅一次)")
+                .isEqualTo(INITIAL_STOCK - 10);
     }
 }

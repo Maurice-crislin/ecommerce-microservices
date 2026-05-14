@@ -1,4 +1,3 @@
-
 package org.example.inventoryservice;
 
 import java.util.ArrayList;
@@ -9,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
 import org.common.product.dto.InventoryBatchCheckResult;
+import org.example.inventoryservice.config.RedisKeys;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.dto.*;
 import org.example.inventoryservice.repository.InventoryOperationRepository;
@@ -30,6 +30,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 public class InventoryConcurrencyTests {
@@ -49,24 +50,30 @@ public class InventoryConcurrencyTests {
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
 
-    private final Long productCodeConcurrent = 1001L; // 并发测试用的产品
-    private final Long productCodeIdempotent = 1002L; // 幂等测试用的产品
+    private final Long productCodeConcurrent = 1001L;
+    private final Long productCodeIdempotent = 1002L;
 
     @BeforeEach
     void initInventory() {
-        // 1️⃣ Redis 幂等 key 清理（防止前一个测试的 Redis 状态残留）
+        // 1️⃣ Redis 幂等 key 清理
         Set<String> idempotencyKeys = stringRedisTemplate.keys(InventoryIdempotencyExecutor.IDEM_PREFIX + "*");
         if (idempotencyKeys != null && !idempotencyKeys.isEmpty()) {
             stringRedisTemplate.delete(idempotencyKeys);
         }
 
+        // Clean Redis stock keys
+        Set<String> stockKeys = stringRedisTemplate.keys("inventory:stock:*");
+        if (stockKeys != null && !stockKeys.isEmpty()) {
+            stringRedisTemplate.delete(stockKeys);
+        }
+
         // 2️⃣ 先删除操作记录
         inventoryOperationRepository.deleteAll();
-        inventoryOperationRepository.flush();  // 强制刷新
+        inventoryOperationRepository.flush();
 
         // 3️⃣ 再删除库存记录
         inventoryRepository.deleteAll();
-        inventoryRepository.flush();  // 强制刷新
+        inventoryRepository.flush();
 
         // 4️⃣ 初始化测试数据
         inventoryRepository.saveAll(List.of(
@@ -74,13 +81,18 @@ public class InventoryConcurrencyTests {
                 new Inventory(productCodeIdempotent, 20)
         ));
 
+        // 5️⃣ 初始化 Redis available stock
+        stringRedisTemplate.opsForValue().set(
+                RedisKeys.availableStockKey(productCodeConcurrent), "50");
+        stringRedisTemplate.opsForValue().set(
+                RedisKeys.availableStockKey(productCodeIdempotent), "20");
     }
 
     // ------------------ 并发锁定库存 ------------------
     @Test
     void testConcurrentStockLock() throws Exception {
         int threadCount = 5;
-        int quantityPerThread = 20; // 每个线程尝试锁定20件
+        int quantityPerThread = 20;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch latch = new CountDownLatch(threadCount);
 
@@ -117,9 +129,14 @@ public class InventoryConcurrencyTests {
 
         System.out.println("Concurrent lock - Success: " + successCount + ", Fail: " + failCount);
 
-        // 校验库存总量没有超卖
-        Inventory inventory = inventoryRepository.findInventoryByProductCode(productCodeConcurrent).orElseThrow();
-        assertThat(inventory.getAvailableStock() + inventory.getLockedStock()).isEqualTo(50);
+        // 校验 Redis 库存总量没有超卖 (only one thread can lock 20)
+        String availStr = stringRedisTemplate.opsForValue().get(
+                RedisKeys.availableStockKey(productCodeConcurrent));
+        String lockedStr = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeConcurrent));
+        long avail = availStr == null ? 0 : Long.parseLong(availStr);
+        long locked = lockedStr == null ? 0 : Long.parseLong(lockedStr);
+        assertThat(avail + locked).isEqualTo(50);
     }
 
     // ------------------ 幂等锁定测试 ------------------
@@ -140,8 +157,10 @@ public class InventoryConcurrencyTests {
         );
         assertThat(response1.isSuccess()).isTrue();
 
-        Inventory inventory1 = inventoryRepository.findInventoryByProductCode(productCodeIdempotent).orElseThrow();
-        assertThat(inventory1.getLockedStock()).isEqualTo(10);
+        // Redis locked should be 10
+        String lockedStr = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeIdempotent));
+        assertThat(lockedStr).isEqualTo("10");
 
         // 重复请求
         MvcResult result2 = mockMvc.perform(post("/inventories/batch/lock")
@@ -152,13 +171,14 @@ public class InventoryConcurrencyTests {
                 result2.getResponse().getContentAsString(),
                 new TypeReference<SimpleResponse<Object>>() {}
         );
+        assertThat(response2.isSuccess()).isTrue();
 
-        assertThat(response2.isSuccess()).isTrue(); // 成功，但库存未重复扣减
+        // Redis locked should still be 10
+        lockedStr = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeIdempotent));
+        assertThat(lockedStr).isEqualTo("10");
 
-        Inventory inventory2 = inventoryRepository.findInventoryByProductCode(productCodeIdempotent).orElseThrow();
-        assertThat(inventory2.getLockedStock()).isEqualTo(10); // 只有第一次锁定生效
-
-        // 重复请求
+        // 第三次重复请求
         MvcResult result3 = mockMvc.perform(post("/inventories/batch/lock")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(event)))
@@ -167,20 +187,19 @@ public class InventoryConcurrencyTests {
                 result3.getResponse().getContentAsString(),
                 new TypeReference<SimpleResponse<Object>>() {}
         );
+        assertThat(response3.isSuccess()).isTrue();
 
-        assertThat(response3.isSuccess()).isTrue(); // 成功，但库存未重复扣减
-
-        Inventory inventory3 = inventoryRepository.findInventoryByProductCode(productCodeIdempotent).orElseThrow();
-        assertThat(inventory3.getLockedStock()).isEqualTo(10); // 只有第一次锁定生效
+        lockedStr = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeIdempotent));
+        assertThat(lockedStr).isEqualTo("10");
     }
-
 
     // ------------------ 批量库存部分可用测试 ------------------
     @Test
     void testBatchCheckStock_partialAvailable() throws Exception {
         List<StockRequest> stockRequestsPartial = List.of(
-                new StockRequest(productCodeConcurrent, 30), // 有库存
-                new StockRequest(productCodeIdempotent, 50)  // 超库存
+                new StockRequest(productCodeConcurrent, 30), // avail=50, ok
+                new StockRequest(productCodeIdempotent, 50)  // avail=20, fail
         );
         InventoryBatchRequest event = new InventoryBatchRequest(1L, stockRequestsPartial);
 
@@ -211,7 +230,7 @@ public class InventoryConcurrencyTests {
 
         List<Future<SimpleResponse<Object>>> futures = new ArrayList<>();
         for (int i = 0; i < threadCount; i++) {
-            final long orderId = 2000L + i; // 幂等 orderId
+            final long orderId = 2000L + i;
             futures.add(executor.submit(() -> {
                 try {
                     List<StockRequest> requests = List.of(
@@ -234,11 +253,25 @@ public class InventoryConcurrencyTests {
         latch.await();
         executor.shutdown();
 
-        Inventory inventoryConcurrent = inventoryRepository.findInventoryByProductCode(productCodeConcurrent).orElseThrow();
-        Inventory inventoryIdempotent = inventoryRepository.findInventoryByProductCode(productCodeIdempotent).orElseThrow();
+        // Consumer 1001: avail=50, each thread tries 20 → only 2 can succeed (20+20=40 <= 50)
+        // Consumer 1002: avail=20, each thread tries 15 → only 1 can succeed
+        // So only 1 thread succeeds fully for both products simultaneously.
 
-        // 校验总库存没有超卖
-        assertThat(inventoryConcurrent.getAvailableStock() + inventoryConcurrent.getLockedStock()).isEqualTo(50);
-        assertThat(inventoryIdempotent.getAvailableStock() + inventoryIdempotent.getLockedStock()).isEqualTo(20);
+        // Redis locked + avail should equal 50 for 1001 and 20 for 1002
+        String availStr1 = stringRedisTemplate.opsForValue().get(
+                RedisKeys.availableStockKey(productCodeConcurrent));
+        String lockedStr1 = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeConcurrent));
+        long avail1 = availStr1 == null ? 0 : Long.parseLong(availStr1);
+        long locked1 = lockedStr1 == null ? 0 : Long.parseLong(lockedStr1);
+        assertThat(avail1 + locked1).isEqualTo(50);
+
+        String availStr2 = stringRedisTemplate.opsForValue().get(
+                RedisKeys.availableStockKey(productCodeIdempotent));
+        String lockedStr2 = stringRedisTemplate.opsForValue().get(
+                RedisKeys.lockedStockKey(productCodeIdempotent));
+        long avail2 = availStr2 == null ? 0 : Long.parseLong(availStr2);
+        long locked2 = lockedStr2 == null ? 0 : Long.parseLong(lockedStr2);
+        assertThat(avail2 + locked2).isEqualTo(20);
     }
 }

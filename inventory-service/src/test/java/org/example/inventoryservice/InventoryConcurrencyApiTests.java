@@ -56,19 +56,25 @@ public class InventoryConcurrencyApiTests {
     @BeforeEach
     void setup() {
 
-        // 0️⃣ Redis 幂等 key 清理（防止前一个测试的 Redis 状态残留）
+        // 0️⃣ Redis 幂等 key 清理
         Set<String> idempotencyKeys = stringRedisTemplate.keys(InventoryIdempotencyExecutor.IDEM_PREFIX + "*");
         if (idempotencyKeys != null && !idempotencyKeys.isEmpty()) {
             stringRedisTemplate.delete(idempotencyKeys);
         }
 
+        // Clean Redis stock keys
+        Set<String> stockKeys = stringRedisTemplate.keys("inventory:stock:*");
+        if (stockKeys != null && !stockKeys.isEmpty()) {
+            stringRedisTemplate.delete(stockKeys);
+        }
+
         // 1️⃣ 先删除操作记录
         inventoryOperationRepository.deleteAll();
-        inventoryOperationRepository.flush();  // 强制刷新
+        inventoryOperationRepository.flush();
 
         // 2️⃣ 再删除库存记录
         inventoryRepository.deleteAll();
-        inventoryRepository.flush();  // 强制刷新
+        inventoryRepository.flush();
 
         stockRequests = List.of(
                 new StockRequest(1001L, 10),
@@ -83,11 +89,11 @@ public class InventoryConcurrencyApiTests {
         );
 
         inventoryRepository.saveAll(inventories);
-        
+
         // 初始化 Redis available stock
         for (Inventory inv : inventories) {
             stringRedisTemplate.opsForValue().set(
-                    RedisKeys.availableStockKey(inv.getProductCode()), 
+                    RedisKeys.availableStockKey(inv.getProductCode()),
                     String.valueOf(inv.getOnHandStock())
             );
         }
@@ -133,24 +139,22 @@ public class InventoryConcurrencyApiTests {
             }).start();
         }
 
-        // 启动所有线程
         startLatch.countDown();
-        // 等待所有线程完成
         doneLatch.await();
 
         // 幂等控制：只有一次真正成功
         assertThat(successCount.get()).isEqualTo(1);
 
-        // 校验库存是否正确扣减（DB onHandStock 不变，Redis avail/locked 变化）
+        // DB onHandStock 不变 (LOCK doesn't touch DB)
         Inventory inv1 = inventoryRepository.findInventoryByProductCode(1001L).get();
         Inventory inv2 = inventoryRepository.findInventoryByProductCode(1002L).get();
         Inventory inv3 = inventoryRepository.findInventoryByProductCode(1003L).get();
 
-        // DB 不变
         assertThat(inv1.getOnHandStock()).isEqualTo(100);
         assertThat(inv2.getOnHandStock()).isEqualTo(200);
         assertThat(inv3.getOnHandStock()).isEqualTo(300);
     }
+
     @Test
     @SneakyThrows
     void testConcurrentBatchLockStock_differentOrderIds() {
@@ -182,12 +186,11 @@ public class InventoryConcurrencyApiTests {
         startLatch.countDown();
         doneLatch.await();
 
-        // 校验库存：乐观锁设计下，只有一个线程能成功
+        // DB 不变（LOCK 只操作 Redis）
         Inventory inv1 = inventoryRepository.findInventoryByProductCode(1001L).get();
         Inventory inv2 = inventoryRepository.findInventoryByProductCode(1002L).get();
         Inventory inv3 = inventoryRepository.findInventoryByProductCode(1003L).get();
 
-        // DB 不变（LOCK 只操作 Redis）
         assertThat(inv1.getOnHandStock()).isEqualTo(100);
         assertThat(inv2.getOnHandStock()).isEqualTo(200);
         assertThat(inv3.getOnHandStock()).isEqualTo(300);
@@ -196,7 +199,6 @@ public class InventoryConcurrencyApiTests {
     @Test
     @SneakyThrows
     void testBatchLockStock_sufficientStock() {
-        // 尝试锁定超过可用库存的数量
         List<StockRequest> largeRequests = List.of(
                 new StockRequest(1001L, 50)
         );
@@ -213,14 +215,12 @@ public class InventoryConcurrencyApiTests {
                 new TypeReference<SimpleResponse<?>>() {}
         );
 
-
         assertThat(response.isSuccess()).isTrue();
-        // assertThat(response.getMessage()).contains("");
     }
+
     @Test
     @SneakyThrows
     void testBatchLockStock_borderStock() {
-        // 尝试锁定超过可用库存的数量
         List<StockRequest> largeRequests = List.of(
                 new StockRequest(1001L, 100)
         );
@@ -237,23 +237,20 @@ public class InventoryConcurrencyApiTests {
                 new TypeReference<SimpleResponse<?>>() {}
         );
 
-        // 应该返回失败
+        // 锁定全部库存应成功
         assertThat(response.isSuccess()).isTrue();
-        // assertThat(response.getMessage()).contains("");
     }
+
     @Test
     void testBatchLockStock_insufficientStock() throws Exception {
-        // 1. 准备：验证初始库存状态
+        // 1. 验证初始库存状态
         Inventory initialInventory = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
-
-        System.out.println("初始库存 - onHand: " + initialInventory.getOnHandStock());
-
         assertThat(initialInventory.getOnHandStock()).isEqualTo(100);
 
         // 2. 尝试锁定超过可用库存的数量
         List<StockRequest> largeRequests = List.of(
-                new StockRequest(1001L, 200)  // 只有100个可用库存，请求200个
+                new StockRequest(1001L, 200)
         );
 
         InventoryBatchRequest event = new InventoryBatchRequest(888L, largeRequests);
@@ -268,38 +265,25 @@ public class InventoryConcurrencyApiTests {
                 new TypeReference<SimpleResponse<?>>() {}
         );
 
-        // 3. 直接查询数据库验证库存状态
+        // 3. API应该返回失败
+        assertThat(response.isSuccess()).isFalse()
+                .withFailMessage("库存不足时锁定应该返回失败");
+
+        // 4. onHand库存应该保持不变（100）
         Inventory afterLockInventory = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
-
-        System.out.println("锁定后库存 - onHand: " + afterLockInventory.getOnHandStock() + 
-                " response " + response + " 状态码 " + result.getResponse().getStatus());
-
-        // 4. 验证断言
-
-        // 断言1：API应该返回失败
-        assertThat(response.isSuccess()).isFalse()
-                .withFailMessage("库存不足时锁定应该返回失败，但返回了成功。响应消息: " + response.getMessage());
-
-        // 断言2：onHand库存应该保持不变（100）
         assertThat(afterLockInventory.getOnHandStock())
                 .isEqualTo(100)
                 .withFailMessage("库存不足时onHand库存不应该被扣减");
 
-        // 断言5：验证没有创建操作记录
+        // 5. 验证创建了LOCK操作记录 (幂等执行器在业务失败前已创建)
         boolean operationExists = inventoryOperationRepository
                 .existsByOrderIdAndOperationType(888L, OperationType.LOCK);
         assertThat(operationExists)
                 .isTrue()
-                .withFailMessage("库存不足时也创建LOCK操作记录");
+                .withFailMessage("库存不足时也应创建LOCK操作记录");
 
-        // 断言6：检查错误消息（如果有的话）
-        if (response.getMessage() != null) {
-            System.out.println("错误消息: " + response.getMessage());
-            // 可以根据业务逻辑检查消息内容
-            // assertThat(response.getMessage()).contains("库存不足");
-        }
-
+        // 6. 重复请求
         MvcResult result2 = mockMvc.perform(post("/inventories/batch/lock")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(event)))
@@ -310,23 +294,16 @@ public class InventoryConcurrencyApiTests {
                 new TypeReference<SimpleResponse<?>>() {}
         );
 
-
-        // 3. 直接查询数据库验证库存状态
         Inventory afterLockInventory2 = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
 
-        System.out.println("锁定后库存 - onHand: " + afterLockInventory2.getOnHandStock() + 
-                " response " + response2 + " 状态码 " + result2.getResponse().getStatus() + 
-                " operationrecord " + inventoryOperationRepository.findByOrderIdAndOperationType(888L, OperationType.LOCK));
-
-        // 断言1：API应该返回失败
         assertThat(response2.isSuccess()).isFalse()
-                .withFailMessage("库存不足时锁定应该返回失败，但返回了成功。响应消息: " + response2.getMessage());
-        // 断言2：onHand库存应该保持不变（100）
+                .withFailMessage("库存不足时锁定应该返回失败，但返回了成功");
         assertThat(afterLockInventory2.getOnHandStock())
                 .isEqualTo(100)
                 .withFailMessage("库存不足时onHand库存不应该被扣减");
     }
+
     @Test
     @SneakyThrows
     void testBatchLockStock_emptyRequest() {
@@ -342,7 +319,6 @@ public class InventoryConcurrencyApiTests {
                 result.getResponse().getContentAsString(),
                 new TypeReference<SimpleResponse<?>>() {}
         );
-
 
         assertThat(response.isSuccess()).isFalse();
     }

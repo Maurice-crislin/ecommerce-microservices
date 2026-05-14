@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
 import org.common.product.dto.InventoryBatchCheckResult;
+import org.example.inventoryservice.config.RedisKeys;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.dto.*;
 import org.example.inventoryservice.repository.InventoryOperationRepository;
@@ -14,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -39,6 +41,10 @@ public class InventoryApiTests {
 
     @Autowired
     private InventoryOperationRepository inventoryOperationRepository;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     private List<StockRequest> stockRequestsAllAvailable;
     private List<StockRequest> stockRequestsPartial;
 
@@ -46,6 +52,10 @@ public class InventoryApiTests {
     void init() {
         inventoryOperationRepository.deleteAll();
         inventoryRepository.deleteAll();
+
+        // Clean Redis stock keys
+        var stockKeys = stringRedisTemplate.keys("inventory:stock:*");
+        if (stockKeys != null) stringRedisTemplate.delete(stockKeys);
 
         List<Inventory> inventories = List.of(
                 new Inventory(1001L, 50),
@@ -63,18 +73,15 @@ public class InventoryApiTests {
         );
 
         inventoryRepository.saveAll(inventories);
-        
+
         // 初始化 Redis available stock
         for (Inventory inv : inventories) {
             stringRedisTemplate.opsForValue().set(
-                    RedisKeys.availableStockKey(inv.getProductCode()), 
+                    RedisKeys.availableStockKey(inv.getProductCode()),
                     String.valueOf(inv.getOnHandStock())
             );
         }
     }
-
-
-
 
     @BeforeEach
     void setup() {
