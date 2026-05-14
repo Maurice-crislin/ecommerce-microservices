@@ -60,7 +60,7 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
                 // redis lua avail-- locked++
                 Long result = stringRedisTemplate.execute(lockScript,
                         List.of(RedisKeys.availableStockKey(productCode), RedisKeys.lockedStockKey(productCode))
-                        , quantity);
+                        , String.valueOf(quantity));
 
                 if (result == 0) {
                     throw new IllegalArgumentException("Insufficient stock for product: " + productCode);
@@ -116,7 +116,7 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
                 // redis lua locked--
                 Long result = stringRedisTemplate.execute(confirmScript,
                         List.of(RedisKeys.lockedStockKey(productCode))
-                        , quantity);
+                        , String.valueOf(quantity));
 
                 if (result == 0) {
                     throw new IllegalArgumentException("Confirm failed: insufficient locked stock for product: " + productCode);
@@ -167,7 +167,7 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
                 // redis lua avail++ locked--
                 Long result = stringRedisTemplate.execute(unlockScript,
                         List.of(RedisKeys.availableStockKey(productCode), RedisKeys.lockedStockKey(productCode))
-                        , quantity);
+                        , String.valueOf(quantity));
 
                 if (result == 0) {
                     throw new IllegalArgumentException("Unlock failed: insufficient locked stock for product:  " + productCode);
