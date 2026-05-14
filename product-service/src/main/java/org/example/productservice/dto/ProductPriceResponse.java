@@ -3,7 +3,7 @@ package org.example.productservice.dto;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.example.productservice.enums.ProductStatus;
+import org.common.product.enums.ProductStatus;
 
 import java.math.BigDecimal;
 

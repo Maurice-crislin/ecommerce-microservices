@@ -3,11 +3,13 @@ package org.example.productservice.service.impl;
 
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.common.product.enums.ProductStatus;
 import org.example.productservice.cache.ProductBloomFilter;
 import org.example.productservice.dto.*;
 import org.example.productservice.entity.Product;
 import org.example.productservice.entity.ProductDetail;
-import org.example.productservice.enums.ProductStatus;
+import org.example.productservice.mapper.ProductEventMapper;
+import org.example.productservice.mq.producer.ProductSyncProducer;
 import org.example.productservice.repository.ProductRepository;
 import org.example.productservice.service.ProductService;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +27,8 @@ public class ProductServiceImpl implements ProductService {
     private final ProductRepository productRepository;
     private final RedisTemplate<String,Object> redisTemplate;
     private final ProductBloomFilter productBloomFilter;
+    private final ProductEventMapper  productEventMapper;
+    private final ProductSyncProducer productSyncProducer;
 
     private static final String PRODUCT_DETAIL_PREFIX = "product:detail:";
     private static final String PRODUCT_LOCK_PREFIX = "product:lock:";
@@ -289,6 +293,11 @@ public class ProductServiceImpl implements ProductService {
         // 再删db (配置了 CascadeType.REMOVE，这里一删，两张表都删了)
         productRepository.delete(product);
 
+        productSyncProducer.publishDeleteProductEvent(
+                productEventMapper.toDeletedEvent(product)
+        );
+
+
         this.sleep(CACHE_DELETE_SLEEP_MS);
         // 第二次删除缓存（确保清空可能被并发读线程写入的旧数据）
         redisTemplate.delete(cacheKey);
@@ -315,6 +324,10 @@ public class ProductServiceImpl implements ProductService {
 
         // 保存
         Product savedProduct = productRepository.save(product);
+
+        productSyncProducer.publishCreateProductEvent(
+                productEventMapper.toCreateEvent(savedProduct)
+        );
 
         // 将新商品编码加入布隆过滤器，防止后续查询误判为不存在
         productBloomFilter.add(savedProduct.getProductCode());
@@ -360,6 +373,10 @@ public class ProductServiceImpl implements ProductService {
 
         // 再改db 两张表都更新了
         Product savedProduct = productRepository.save(product);
+
+        productSyncProducer.publishUpdateProductEvent(
+                productEventMapper.toUpdatedEvent(savedProduct)
+        );
 
         this.sleep(CACHE_DELETE_SLEEP_MS);
         // 第二次删除缓存（确保清空可能被并发读线程写入的旧数据）

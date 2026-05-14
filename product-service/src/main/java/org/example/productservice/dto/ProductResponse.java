@@ -1,12 +1,10 @@
 package org.example.productservice.dto;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.common.product.enums.CategoryCode;
-import org.example.productservice.enums.ProductStatus;
+import org.common.product.enums.ProductStatus;
 
 import java.math.BigDecimal;
 
