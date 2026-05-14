@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.SneakyThrows;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
+import org.example.inventoryservice.config.RedisKeys;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.domain.OperationType;
 
@@ -82,6 +83,14 @@ public class InventoryConcurrencyApiTests {
         );
 
         inventoryRepository.saveAll(inventories);
+        
+        // 初始化 Redis available stock
+        for (Inventory inv : inventories) {
+            stringRedisTemplate.opsForValue().set(
+                    RedisKeys.availableStockKey(inv.getProductCode()), 
+                    String.valueOf(inv.getOnHandStock())
+            );
+        }
     }
 
     // ----------------- 并发 batch/lock 测试 -----------------
@@ -132,18 +141,15 @@ public class InventoryConcurrencyApiTests {
         // 幂等控制：只有一次真正成功
         assertThat(successCount.get()).isEqualTo(1);
 
-        // 校验库存是否正确扣减
+        // 校验库存是否正确扣减（DB onHandStock 不变，Redis avail/locked 变化）
         Inventory inv1 = inventoryRepository.findInventoryByProductCode(1001L).get();
         Inventory inv2 = inventoryRepository.findInventoryByProductCode(1002L).get();
         Inventory inv3 = inventoryRepository.findInventoryByProductCode(1003L).get();
 
-        assertThat(inv1.getLockedStock()).isEqualTo(10);
-        assertThat(inv2.getLockedStock()).isEqualTo(20);
-        assertThat(inv3.getLockedStock()).isEqualTo(30);
-
-        assertThat(inv1.getAvailableStock()).isEqualTo(90);
-        assertThat(inv2.getAvailableStock()).isEqualTo(180);
-        assertThat(inv3.getAvailableStock()).isEqualTo(270);
+        // DB 不变
+        assertThat(inv1.getOnHandStock()).isEqualTo(100);
+        assertThat(inv2.getOnHandStock()).isEqualTo(200);
+        assertThat(inv3.getOnHandStock()).isEqualTo(300);
     }
     @Test
     @SneakyThrows
@@ -181,15 +187,10 @@ public class InventoryConcurrencyApiTests {
         Inventory inv2 = inventoryRepository.findInventoryByProductCode(1002L).get();
         Inventory inv3 = inventoryRepository.findInventoryByProductCode(1003L).get();
 
-        // 正确断言：只有一个成功
-        assertThat(inv1.getLockedStock()).isEqualTo(10);   // 不是50！
-        assertThat(inv2.getLockedStock()).isEqualTo(20);   // 不是100！
-        assertThat(inv3.getLockedStock()).isEqualTo(30);   // 不是150！
-
-        // 也可以验证可用库存减少
-        assertThat(inv1.getAvailableStock()).isEqualTo(90);   // 100 - 10
-        assertThat(inv2.getAvailableStock()).isEqualTo(180);  // 200 - 20
-        assertThat(inv3.getAvailableStock()).isEqualTo(270);  // 300 - 30
+        // DB 不变（LOCK 只操作 Redis）
+        assertThat(inv1.getOnHandStock()).isEqualTo(100);
+        assertThat(inv2.getOnHandStock()).isEqualTo(200);
+        assertThat(inv3.getOnHandStock()).isEqualTo(300);
     }
 
     @Test
@@ -246,11 +247,9 @@ public class InventoryConcurrencyApiTests {
         Inventory initialInventory = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
 
-        System.out.println("初始库存 - 可用: " + initialInventory.getAvailableStock() +
-                ", 锁定: " + initialInventory.getLockedStock());
+        System.out.println("初始库存 - onHand: " + initialInventory.getOnHandStock());
 
-        assertThat(initialInventory.getAvailableStock()).isEqualTo(100);
-        assertThat(initialInventory.getLockedStock()).isEqualTo(0);
+        assertThat(initialInventory.getOnHandStock()).isEqualTo(100);
 
         // 2. 尝试锁定超过可用库存的数量
         List<StockRequest> largeRequests = List.of(
@@ -273,8 +272,8 @@ public class InventoryConcurrencyApiTests {
         Inventory afterLockInventory = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
 
-        System.out.println("锁定后库存 - 可用: " + afterLockInventory.getAvailableStock() +
-                ", 锁定: " + afterLockInventory.getLockedStock() + " response " + response + " 状态码 " + result.getResponse().getStatus());
+        System.out.println("锁定后库存 - onHand: " + afterLockInventory.getOnHandStock() + 
+                " response " + response + " 状态码 " + result.getResponse().getStatus());
 
         // 4. 验证断言
 
@@ -282,20 +281,10 @@ public class InventoryConcurrencyApiTests {
         assertThat(response.isSuccess()).isFalse()
                 .withFailMessage("库存不足时锁定应该返回失败，但返回了成功。响应消息: " + response.getMessage());
 
-        // 断言2：可用库存应该保持不变（100）
-        assertThat(afterLockInventory.getAvailableStock())
+        // 断言2：onHand库存应该保持不变（100）
+        assertThat(afterLockInventory.getOnHandStock())
                 .isEqualTo(100)
-                .withFailMessage("库存不足时可用库存不应该被扣减");
-
-        // 断言3：锁定库存应该为0
-        assertThat(afterLockInventory.getLockedStock())
-                .isEqualTo(0)
-                .withFailMessage("库存不足时不应该有锁定库存");
-
-        // 断言4：总库存应该保持不变（可用+锁定=100）
-        assertThat(afterLockInventory.getAvailableStock() + afterLockInventory.getLockedStock())
-                .isEqualTo(100)
-                .withFailMessage("总库存应该保持不变");
+                .withFailMessage("库存不足时onHand库存不应该被扣减");
 
         // 断言5：验证没有创建操作记录
         boolean operationExists = inventoryOperationRepository
@@ -326,26 +315,17 @@ public class InventoryConcurrencyApiTests {
         Inventory afterLockInventory2 = inventoryRepository.findInventoryByProductCode(1001L)
                 .orElseThrow(() -> new RuntimeException("商品1001不存在"));
 
-        System.out.println("锁定后库存 - 可用: " + afterLockInventory2.getAvailableStock() +
-                ", 锁定: " + afterLockInventory2.getLockedStock() +  " response " + response2 + " 状态码 " + result2.getResponse().getStatus() + " operationrecord " + inventoryOperationRepository.findByOrderIdAndOperationType(888L, OperationType.LOCK));
+        System.out.println("锁定后库存 - onHand: " + afterLockInventory2.getOnHandStock() + 
+                " response " + response2 + " 状态码 " + result2.getResponse().getStatus() + 
+                " operationrecord " + inventoryOperationRepository.findByOrderIdAndOperationType(888L, OperationType.LOCK));
 
         // 断言1：API应该返回失败
         assertThat(response2.isSuccess()).isFalse()
                 .withFailMessage("库存不足时锁定应该返回失败，但返回了成功。响应消息: " + response2.getMessage());
-        // 断言2：可用库存应该保持不变（100）
-        assertThat(afterLockInventory2.getAvailableStock())
+        // 断言2：onHand库存应该保持不变（100）
+        assertThat(afterLockInventory2.getOnHandStock())
                 .isEqualTo(100)
-                .withFailMessage("库存不足时可用库存不应该被扣减");
-
-        // 断言3：锁定库存应该为0
-        assertThat(afterLockInventory2.getLockedStock())
-                .isEqualTo(0)
-                .withFailMessage("库存不足时不应该有锁定库存");
-
-        // 断言4：总库存应该保持不变（可用+锁定=100）
-        assertThat(afterLockInventory2.getAvailableStock() + afterLockInventory2.getLockedStock())
-                .isEqualTo(100)
-                .withFailMessage("总库存应该保持不变");
+                .withFailMessage("库存不足时onHand库存不应该被扣减");
     }
     @Test
     @SneakyThrows

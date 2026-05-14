@@ -63,6 +63,14 @@ public class InventoryApiTests {
         );
 
         inventoryRepository.saveAll(inventories);
+        
+        // 初始化 Redis available stock
+        for (Inventory inv : inventories) {
+            stringRedisTemplate.opsForValue().set(
+                    RedisKeys.availableStockKey(inv.getProductCode()), 
+                    String.valueOf(inv.getOnHandStock())
+            );
+        }
     }
 
 

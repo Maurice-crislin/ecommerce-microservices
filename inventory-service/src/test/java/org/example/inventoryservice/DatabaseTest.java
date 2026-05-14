@@ -23,7 +23,7 @@ public class DatabaseTest {
         Optional<Inventory> result = inventoryRepository.findInventoryByProductCode(2001L);
         assertTrue(result.isPresent());
 
-        System.out.println("Inventory fetched: " + result.get().getProductCode() + " - " + result.get().getAvailableStock());
+        System.out.println("Inventory fetched: " + result.get().getProductCode() + " - " + result.get().getOnHandStock());
 
         // clear
         inventoryRepository.delete(inventory);

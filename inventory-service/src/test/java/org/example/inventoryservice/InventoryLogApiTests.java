@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
+import org.example.inventoryservice.config.RedisKeys;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.domain.InventoryLog;
 import org.example.inventoryservice.domain.OperationType;
@@ -12,6 +13,7 @@ import org.example.inventoryservice.repository.InventoryLogRepository;
 import org.example.inventoryservice.repository.InventoryRepository;
 import org.example.inventoryservice.service.InventoryDomainService;
 import org.example.inventoryservice.service.InventoryService;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -52,6 +54,9 @@ public class InventoryLogApiTests {
     @Autowired
     private InventoryDomainService inventoryDomainService;
 
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
     @BeforeEach
     void setUp() {
         inventoryLogRepository.deleteAll();
@@ -63,6 +68,14 @@ public class InventoryLogApiTests {
                 new Inventory(1002L, 100)
         );
         inventoryRepository.saveAll(inventories);
+        
+        // 初始化 Redis available stock
+        for (Inventory inv : inventories) {
+            stringRedisTemplate.opsForValue().set(
+                    RedisKeys.availableStockKey(inv.getProductCode()), 
+                    String.valueOf(inv.getOnHandStock())
+            );
+        }
     }
 
     // ==================== Repository 层基础测试 ====================
@@ -141,7 +154,7 @@ public class InventoryLogApiTests {
             assertThat(inventoryRepository.findInventoryByProductCode(2001L))
                     .isPresent()
                     .hasValueSatisfying(inv -> {
-                        assertThat(inv.getAvailableStock()).isEqualTo(100);
+                        assertThat(inv.getOnHandStock()).isEqualTo(100);
                     });
 
             // 验证 inventory_log 表
@@ -182,7 +195,7 @@ public class InventoryLogApiTests {
 
             // 验证库存已扣减
             Inventory inventory = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inventory.getAvailableStock()).isEqualTo(48);
+            assertThat(inventory.getOnHandStock()).isEqualTo(48);
 
             // 验证日志
             List<InventoryLog> logs = inventoryLogRepository.findAll();
@@ -206,7 +219,7 @@ public class InventoryLogApiTests {
 
             // 验证库存已增加
             Inventory inventory = inventoryRepository.findInventoryByProductCode(1002L).get();
-            assertThat(inventory.getAvailableStock()).isEqualTo(110);
+            assertThat(inventory.getOnHandStock()).isEqualTo(110);
 
             // 验证日志
             List<InventoryLog> logs = inventoryLogRepository.findAll();
@@ -261,14 +274,12 @@ public class InventoryLogApiTests {
                             .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isOk());
 
-            // 验证库存已锁定
+            // 验证库存已锁定（DB onHandStock 不变，Redis avail/locked 变化）
             Inventory inv1001 = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv1001.getAvailableStock()).isEqualTo(45);
-            assertThat(inv1001.getLockedStock()).isEqualTo(5);
+            assertThat(inv1001.getOnHandStock()).isEqualTo(50);  // DB 不变
 
             Inventory inv1002 = inventoryRepository.findInventoryByProductCode(1002L).get();
-            assertThat(inv1002.getAvailableStock()).isEqualTo(90);
-            assertThat(inv1002.getLockedStock()).isEqualTo(10);
+            assertThat(inv1002.getOnHandStock()).isEqualTo(100);  // DB 不变
 
             // 验证日志: 两条 LOCK 记录，orderId=100
             List<InventoryLog> logs = inventoryLogRepository.findAll();
@@ -309,9 +320,8 @@ public class InventoryLogApiTests {
 
             // 验证库存
             Inventory inv1001 = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv1001.getLockedStock()).isEqualTo(0);
             assertThat(inv1001.getSoldStock()).isEqualTo(5);
-            assertThat(inv1001.getAvailableStock()).isEqualTo(45);
+            assertThat(inv1001.getOnHandStock()).isEqualTo(45);
 
             // 验证日志
             List<InventoryLog> logs = inventoryLogRepository.findAll();
@@ -340,10 +350,9 @@ public class InventoryLogApiTests {
                     new StockRequest(1001L, 3)
             ));
 
-            // 验证库存：locked 减少，available 恢复
+            // 验证库存：DB onHandStock 不变（UNLOCK 只操作 Redis）
             Inventory inv = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv.getLockedStock()).isEqualTo(0);
-            assertThat(inv.getAvailableStock()).isEqualTo(50);
+            assertThat(inv.getOnHandStock()).isEqualTo(50);
 
             // 验证日志
             List<InventoryLog> logs = inventoryLogRepository.findAll();
@@ -392,8 +401,7 @@ public class InventoryLogApiTests {
 
             // 验证最终库存状态
             Inventory inv = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv.getAvailableStock()).isEqualTo(45);
-            assertThat(inv.getLockedStock()).isEqualTo(0);
+            assertThat(inv.getOnHandStock()).isEqualTo(45);
             assertThat(inv.getSoldStock()).isEqualTo(5);
         }
     }
@@ -414,7 +422,7 @@ public class InventoryLogApiTests {
 
             // 库存未变化
             Inventory inv = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv.getAvailableStock()).isEqualTo(50);
+            assertThat(inv.getOnHandStock()).isEqualTo(50);
 
             // 日志未写入
             assertThat(inventoryLogRepository.findAll()).isEmpty();
@@ -443,7 +451,7 @@ public class InventoryLogApiTests {
 
             // 事务回滚：1001 的库存应恢复原值，log 表无记录
             Inventory inv = inventoryRepository.findInventoryByProductCode(1001L).get();
-            assertThat(inv.getAvailableStock()).isEqualTo(50);
+            assertThat(inv.getOnHandStock()).isEqualTo(50);
             assertThat(inventoryLogRepository.findAll()).isEmpty();
         }
     }
