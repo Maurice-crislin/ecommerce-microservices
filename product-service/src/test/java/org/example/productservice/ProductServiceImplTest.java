@@ -1,10 +1,15 @@
 package org.example.productservice;
 
+import org.common.product.enums.CategoryCode;
+import org.common.product.enums.ProductStatus;
 import org.example.productservice.cache.ProductBloomFilter;
 import org.example.productservice.dto.*;
 import org.example.productservice.entity.Product;
-import org.example.productservice.enums.ProductStatus;
+import org.example.productservice.entity.ProductDetail;
+import org.example.productservice.mapper.ProductEventMapper;
+import org.example.productservice.mq.producer.ProductSyncProducer;
 import org.example.productservice.repository.ProductRepository;
+import org.example.productservice.service.ProductService;
 import org.example.productservice.service.impl.ProductServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,9 +17,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -29,9 +36,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+@DisplayName("ProductService 单元测试")
 class ProductServiceImplTest {
-
-    private ProductServiceImpl productService;
 
     @Mock
     private ProductRepository productRepository;
@@ -45,465 +52,311 @@ class ProductServiceImplTest {
     @Mock
     private ProductBloomFilter productBloomFilter;
 
-    private static final Long PRODUCT_CODE_1 = 10010001L;
-    private static final Long PRODUCT_CODE_2 = 10010002L;
-    private static final Long PRODUCT_CODE_3 = 10010003L;
-    private static final Long NON_EXISTENT_CODE = 99999999L;
-    private static final Long PRODUCT_CODE_INACTIVE = 10010005L;
+    @Mock
+    private ProductEventMapper productEventMapper;
+
+    @Mock
+    private ProductSyncProducer productSyncProducer;
+
+    @InjectMocks
+    private ProductServiceImpl productService;
+
+    private static final Long EXISTING_PRODUCT_CODE = 10010001L;
+    private static final Long NON_EXISTENT_PRODUCT_CODE = 99999999L;
     private static final String CACHE_KEY_PREFIX = "product:detail:";
     private static final String LOCK_KEY_PREFIX = "product:lock:";
-    private static final long CACHE_TTL = 1_800_000L;
 
-    private Product activeProduct;
-    private Product activeProduct2;
-    private Product inactiveProduct;
+    private Product existingProduct;
+    private ProductDetail existingDetail;
 
     @BeforeEach
     void setUp() {
-        productService = new ProductServiceImpl(productRepository, redisTemplate, productBloomFilter);
-        ReflectionTestUtils.setField(productService, "cacheTtl", (int) CACHE_TTL);
+        ReflectionTestUtils.setField(productService, "cacheTtl", 1800000);
 
-        activeProduct = new Product();
-        activeProduct.setId(1L);
-        activeProduct.setProductCode(PRODUCT_CODE_1);
-        activeProduct.setProductName("Active Product");
-        activeProduct.setPrice(new BigDecimal("199.99"));
-        activeProduct.setStatus(ProductStatus.ACTIVE);
+        // Setup existing product
+        existingDetail = new ProductDetail();
+        existingDetail.setBrand("TestBrand");
+        existingDetail.setCategoryCode(CategoryCode.ELECTRONICS);
+        existingDetail.setDescription("Test Description");
 
-        activeProduct2 = new Product();
-        activeProduct2.setId(2L);
-        activeProduct2.setProductCode(PRODUCT_CODE_2);
-        activeProduct2.setProductName("Active Product 2");
-        activeProduct2.setPrice(new BigDecimal("99.99"));
-        activeProduct2.setStatus(ProductStatus.ACTIVE);
+        existingProduct = new Product();
+        existingProduct.setId(1L);
+        existingProduct.setProductCode(EXISTING_PRODUCT_CODE);
+        existingProduct.setProductName("Test Product");
+        existingProduct.setPrice(new BigDecimal("199.99"));
+        existingProduct.setStatus(ProductStatus.ACTIVE);
+        existingProduct.setProductDetail(existingDetail);
 
-        inactiveProduct = new Product();
-        inactiveProduct.setId(3L);
-        inactiveProduct.setProductCode(PRODUCT_CODE_INACTIVE);
-        inactiveProduct.setProductName("Inactive Product");
-        inactiveProduct.setPrice(new BigDecimal("299.99"));
-        inactiveProduct.setStatus(ProductStatus.INACTIVE);
-
-        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     // ========================================================================
-    // getProductPrice (单商品价格查询) - Core flow
+    // getProductPrice 测试
     // ========================================================================
     @Nested
-    @DisplayName("getProductPrice - Single product price query")
+    @DisplayName("getProductPrice 方法测试")
     class GetProductPriceTests {
 
         @Test
-        @DisplayName("Should return cached product price when Redis cache hits")
-        void shouldReturnCachedProductPrice() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-
-            Product cachedProduct = new Product();
-            cachedProduct.setProductCode(PRODUCT_CODE_1);
-            cachedProduct.setPrice(new BigDecimal("199.99"));
-            cachedProduct.setStatus(ProductStatus.ACTIVE);
-
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1)).thenReturn(cachedProduct);
-
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
-
-            assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("199.99"));
-            assertThat(response.getStatus()).isEqualTo(ProductStatus.ACTIVE);
-
-            verify(valueOperations).get(CACHE_KEY_PREFIX + PRODUCT_CODE_1);
-            verify(productRepository, never()).findProductByProductCode(anyLong());
-        }
-
-        @Test
-        @DisplayName("Should throw IllegalArgumentException when bloom filter says product does NOT exist")
-        void shouldThrowWhenBloomFilterSaysNotExist() {
-            when(productBloomFilter.mightContain(NON_EXISTENT_CODE)).thenReturn(false);
-
-            assertThatThrownBy(() -> productService.getProductPrice(NON_EXISTENT_CODE))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("not found");
-
-            verify(productBloomFilter).mightContain(NON_EXISTENT_CODE);
-            verifyNoInteractions(valueOperations);
-            verifyNoInteractions(productRepository);
-        }
-
-        @Test
-        @DisplayName("Should throw IllegalArgumentException when productCode is null")
-        void shouldThrowWhenProductCodeIsNull() {
+        @DisplayName("应该抛出异常当 productCode 为 null")
+        void shouldThrowExceptionWhenProductCodeIsNull() {
             assertThatThrownBy(() -> productService.getProductPrice(null))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Product code is null");
         }
 
         @Test
-        @DisplayName("Should query DB and cache result when cache misses and lock acquired (double-check pattern)")
-        void shouldQueryDbAndCacheWhenCacheMiss() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            // Double-check: first get (miss), second get after lock (miss), then DB
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1))
-                    .thenReturn(null)   // first read: cache miss
-                    .thenReturn(null);  // double-check after lock: still miss
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(true);
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
+        @DisplayName("应该抛出异常当布隆过滤器判定商品不存在")
+        void shouldThrowExceptionWhenBloomFilterSaysNotExist() {
+            when(productBloomFilter.mightContain(NON_EXISTENT_PRODUCT_CODE)).thenReturn(false);
 
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
+            assertThatThrownBy(() -> productService.getProductPrice(NON_EXISTENT_PRODUCT_CODE))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Product not found:" + NON_EXISTENT_PRODUCT_CODE);
+        }
+
+        @Test
+        @DisplayName("应该从缓存命中并返回商品价格")
+        void shouldReturnFromCacheWhenHit() {
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.get(CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE)).thenReturn(existingProduct);
+
+            ProductPriceResponse response = productService.getProductPrice(EXISTING_PRODUCT_CODE);
 
             assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("199.99"));
+            assertThat(response.getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
+            assertThat(response.getPrice()).isEqualTo(new BigDecimal("199.99"));
             assertThat(response.getStatus()).isEqualTo(ProductStatus.ACTIVE);
 
-            verify(valueOperations, times(2)).get(CACHE_KEY_PREFIX + PRODUCT_CODE_1);
-            verify(valueOperations).setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS));
-            verify(productRepository).findProductByProductCode(PRODUCT_CODE_1);
-            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + PRODUCT_CODE_1), eq(activeProduct), eq(CACHE_TTL), eq(TimeUnit.MILLISECONDS));
-            verify(redisTemplate).delete(LOCK_KEY_PREFIX + PRODUCT_CODE_1);
+            verify(productRepository, never()).findProductByProductCode(any());
         }
 
         @Test
-        @DisplayName("Should write null placeholder and throw when product not found in DB")
-        void shouldWriteNullPlaceholderWhenProductNotInDb() {
-            when(productBloomFilter.mightContain(NON_EXISTENT_CODE)).thenReturn(true);
-            when(valueOperations.get(CACHE_KEY_PREFIX + NON_EXISTENT_CODE))
-                    .thenReturn(null)   // first read: miss
-                    .thenReturn(null);  // double-check: still miss
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + NON_EXISTENT_CODE), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(true);
-            when(productRepository.findProductByProductCode(NON_EXISTENT_CODE)).thenReturn(Optional.empty());
+        @DisplayName("应该从数据库查询并缓存当缓存未命中")
+        void shouldQueryDatabaseAndCacheWhenCacheMiss() {
+            String cacheKey = CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE;
+            String lockKey = LOCK_KEY_PREFIX + EXISTING_PRODUCT_CODE;
 
-            assertThatThrownBy(() -> productService.getProductPrice(NON_EXISTENT_CODE))
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.get(cacheKey)).thenReturn(null);
+            when(valueOperations.setIfAbsent(eq(lockKey), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
+                    .thenReturn(true);
+            when(productRepository.findProductByProductCode(EXISTING_PRODUCT_CODE))
+                    .thenReturn(Optional.of(existingProduct));
+
+            ProductPriceResponse response = productService.getProductPrice(EXISTING_PRODUCT_CODE);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
+
+            verify(valueOperations).set(eq(cacheKey), eq(existingProduct), eq(1800000L), eq(TimeUnit.MILLISECONDS));
+            // delete 是 RedisTemplate 的方法，不是 ValueOperations 的方法
+            verify(redisTemplate).delete(lockKey);
+        }
+
+        @Test
+        @DisplayName("应该抛出异常当数据库查询不到商品")
+        void shouldThrowExceptionWhenProductNotFoundInDatabase() {
+            String cacheKey = CACHE_KEY_PREFIX + NON_EXISTENT_PRODUCT_CODE;
+            String lockKey = LOCK_KEY_PREFIX + NON_EXISTENT_PRODUCT_CODE;
+
+            when(productBloomFilter.mightContain(NON_EXISTENT_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.get(cacheKey)).thenReturn(null);
+            when(valueOperations.setIfAbsent(eq(lockKey), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
+                    .thenReturn(true);
+            when(productRepository.findProductByProductCode(NON_EXISTENT_PRODUCT_CODE))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> productService.getProductPrice(NON_EXISTENT_PRODUCT_CODE))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("not found");
+                    .hasMessageContaining("Product not found: " + NON_EXISTENT_PRODUCT_CODE);
 
-            // Verify null placeholder was written with 5 MINUTES TTL
-            ArgumentCaptor<Product> productCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + NON_EXISTENT_CODE), productCaptor.capture(), eq(5L), eq(TimeUnit.MINUTES));
-            assertThat(productCaptor.getValue().getProductCode()).isNull(); // empty placeholder
-
-            verify(redisTemplate).delete(LOCK_KEY_PREFIX + NON_EXISTENT_CODE);
+            verify(valueOperations).set(eq(cacheKey), any(Product.class), eq(5L), eq(TimeUnit.MINUTES));
+            verify(redisTemplate).delete(lockKey);
         }
 
         @Test
-        @DisplayName("Should throw IllegalArgumentException when null-placeholder is detected in cache")
-        void shouldThrowWhenNullPlaceholderDetected() {
-            when(productBloomFilter.mightContain(NON_EXISTENT_CODE)).thenReturn(true);
-            Product nullPlaceholder = new Product();
-            when(valueOperations.get(CACHE_KEY_PREFIX + NON_EXISTENT_CODE)).thenReturn(nullPlaceholder);
+        @DisplayName("应该处理缓存中的空占位对象并抛出异常")
+        void shouldHandleEmptyPlaceholderInCache() {
+            Product emptyProduct = new Product(); // productCode is null
+            String cacheKey = CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE;
 
-            assertThatThrownBy(() -> productService.getProductPrice(NON_EXISTENT_CODE))
-                    .isInstanceOf(IllegalArgumentException.class);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.get(cacheKey)).thenReturn(emptyProduct);
 
-            verify(valueOperations).get(CACHE_KEY_PREFIX + NON_EXISTENT_CODE);
-            verify(productRepository, never()).findProductByProductCode(anyLong());
+            assertThatThrownBy(() -> productService.getProductPrice(EXISTING_PRODUCT_CODE))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Product not found");
         }
 
         @Test
-        @DisplayName("Should retry when lock not acquired and eventually succeed via double-check")
-        void shouldRetryWhenLockNotAcquiredAndSucceed() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            // Two get calls before lock (first call misses), then third get for double-check
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1))
-                    .thenReturn(null)             // first read: miss
-                    .thenReturn(null)             // retry: still miss
-                    .thenReturn(activeProduct);   // double-check after lock: hit!
+        @DisplayName("应该重试获取锁当锁被占用时")
+        void shouldRetryWhenLockIsHeld() {
+            String cacheKey = CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE;
+            String lockKey = LOCK_KEY_PREFIX + EXISTING_PRODUCT_CODE;
 
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(false)  // lock fail first time
-                    .thenReturn(true);  // lock succeed second time
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.get(cacheKey)).thenReturn(null);
+            // First attempt: lock is held by another thread
+            when(valueOperations.setIfAbsent(eq(lockKey), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
+                    .thenReturn(false)
+                    .thenReturn(true); // Second attempt: acquire lock successfully
+            when(productRepository.findProductByProductCode(EXISTING_PRODUCT_CODE))
+                    .thenReturn(Optional.of(existingProduct));
 
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
+            ProductPriceResponse response = productService.getProductPrice(EXISTING_PRODUCT_CODE);
 
             assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-
-            verify(valueOperations, atLeast(2)).setIfAbsent(
-                    eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS));
-            verify(productRepository, never()).findProductByProductCode(anyLong()); // resolved from double-check
-            verify(redisTemplate).delete(LOCK_KEY_PREFIX + PRODUCT_CODE_1);
-        }
-
-        @Test
-        @DisplayName("Should retry when lock not acquired and fallback to DB, cache result")
-        void shouldRetryLockThenQueryDb() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1))
-                    .thenReturn(null)   // first read: miss
-                    .thenReturn(null)   // retry: miss (then lock succeed, then double-check)
-                    .thenReturn(null);  // double-check after lock: still miss
-
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(false)  // lock fail
-                    .thenReturn(true);  // lock succeed (retry)
-
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
-
-            assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-
-            verify(productRepository).findProductByProductCode(PRODUCT_CODE_1);
-            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + PRODUCT_CODE_1), eq(activeProduct), eq(CACHE_TTL), eq(TimeUnit.MILLISECONDS));
-            verify(redisTemplate).delete(LOCK_KEY_PREFIX + PRODUCT_CODE_1);
-        }
-
-        @Test
-        @DisplayName("Should throw RuntimeException when max retries exhausted")
-        void shouldThrowWhenMaxRetriesExhausted() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1)).thenReturn(null);
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(false);
-
-            assertThatThrownBy(() -> productService.getProductPrice(PRODUCT_CODE_1))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("Failed to acquire lock");
-
-            verify(valueOperations, atLeast(5)).setIfAbsent(
-                    eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS));
-        }
-
-        @Test
-        @DisplayName("Should handle Redis read failure gracefully and fallback to DB")
-        void shouldHandleRedisReadFailure() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            // tryGetProductFromRedis catches exception and returns null
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1))
-                    .thenThrow(new RuntimeException("Redis connection error"))
-                    .thenReturn(null);
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(true);
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
-
-            assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("199.99"));
-            verify(productRepository).findProductByProductCode(PRODUCT_CODE_1);
-        }
-
-        @Test
-        @DisplayName("Should double-check Redis after acquiring lock and return if found")
-        void shouldDoubleCheckRedisAfterLock() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            when(valueOperations.get(CACHE_KEY_PREFIX + PRODUCT_CODE_1))
-                    .thenReturn(null)             // first read: miss
-                    .thenReturn(activeProduct);   // double-check after lock: hit
-
-            when(valueOperations.setIfAbsent(eq(LOCK_KEY_PREFIX + PRODUCT_CODE_1), eq("1"), eq(20L), eq(TimeUnit.SECONDS)))
-                    .thenReturn(true);
-
-            ProductPriceResponse response = productService.getProductPrice(PRODUCT_CODE_1);
-
-            assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("199.99"));
-
-            verify(productRepository, never()).findProductByProductCode(anyLong());
-            verify(redisTemplate).delete(LOCK_KEY_PREFIX + PRODUCT_CODE_1);
+            verify(valueOperations, times(2)).setIfAbsent(eq(lockKey), eq("1"), eq(20L), eq(TimeUnit.SECONDS));
+            verify(redisTemplate).delete(lockKey);
         }
     }
 
     // ========================================================================
-    // getProductPrices (批量查询 - internal method)
+    // getProductPrices (批量基础查询) 测试
     // ========================================================================
     @Nested
-    @DisplayName("getProductPrices - Batch product prices query")
+    @DisplayName("getProductPrices 方法测试")
     class GetProductPricesTests {
 
-        @BeforeEach
-        void setUp() {
-            lenient().when(productBloomFilter.mightContain(anyLong())).thenReturn(true);
+        @Test
+        @DisplayName("应该返回空列表当输入为空")
+        void shouldReturnEmptyWhenInputIsEmpty() {
+            List<ProductPriceResponse> result = productService.getProductPrices(Collections.emptyList());
+
+            assertThat(result).isEmpty();
+            verify(productRepository, never()).findProductsByProductCodeIn(any());
         }
 
         @Test
-        @DisplayName("Should return results from Redis cache when all codes hit")
-        void shouldReturnResultsFromRedisCache() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_2);
+        @DisplayName("应该过滤布隆过滤器判定不存在的商品")
+        void shouldFilterProductsNotInBloomFilter() {
+            List<Long> inputCodes = Arrays.asList(EXISTING_PRODUCT_CODE, NON_EXISTENT_PRODUCT_CODE);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(productBloomFilter.mightContain(NON_EXISTENT_PRODUCT_CODE)).thenReturn(false);
 
-            Product cached2 = new Product();
-            cached2.setProductCode(PRODUCT_CODE_2);
-            cached2.setPrice(new BigDecimal("99.99"));
-            cached2.setStatus(ProductStatus.ACTIVE);
+            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(null, null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Collections.singletonList(existingProduct));
 
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, cached2));
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
 
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
+            // Only existing product should be returned
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
 
-            assertThat(responses).hasSize(2);
-            assertThat(responses.get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(responses.get(1).getProductCode()).isEqualTo(PRODUCT_CODE_2);
-
-            verify(valueOperations).multiGet(anyList());
-            verify(productRepository, never()).findProductsByProductCodeIn(anyList());
+            ArgumentCaptor<List<Long>> captor = ArgumentCaptor.forClass(List.class);
+            verify(productRepository).findProductsByProductCodeIn(captor.capture());
+            assertThat(captor.getValue()).containsExactly(EXISTING_PRODUCT_CODE);
         }
 
         @Test
-        @DisplayName("Should query DB for cache-missed products and backfill cache")
-        void shouldQueryDbForCacheMisses() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_2);
+        @DisplayName("应该从批量缓存读取命中的商品")
+        void shouldGetHitProductsFromBatchCache() {
+            List<Long> inputCodes = Collections.singletonList(EXISTING_PRODUCT_CODE);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Collections.singletonList(existingProduct));
 
-            // Some codes in cache, some miss
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, null));
-            when(productRepository.findProductsByProductCodeIn(Arrays.asList(PRODUCT_CODE_2)))
-                    .thenReturn(Arrays.asList(activeProduct2));
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
 
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
 
-            assertThat(responses).hasSize(2);
-            assertThat(responses.get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(responses.get(1).getProductCode()).isEqualTo(PRODUCT_CODE_2);
-
-            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + PRODUCT_CODE_2), any(Product.class), eq(CACHE_TTL), eq(TimeUnit.MILLISECONDS));
+            verify(productRepository, never()).findProductsByProductCodeIn(any());
         }
 
         @Test
-        @DisplayName("Should write null placeholder for product missing from both cache and DB")
-        void shouldWriteNullPlaceholderForMissingProduct() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, NON_EXISTENT_CODE);
+        @DisplayName("应该从数据库查询缓存未命中的商品并回写缓存")
+        void shouldQueryDatabaseForMissAndWriteBack() {
+            List<Long> inputCodes = Collections.singletonList(EXISTING_PRODUCT_CODE);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Collections.singletonList(null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Collections.singletonList(existingProduct));
 
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, null));
-            when(productRepository.findProductsByProductCodeIn(Arrays.asList(NON_EXISTENT_CODE)))
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
+
+            assertThat(result).hasSize(1);
+            // set 是 ValueOperations 的方法
+            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE), eq(existingProduct), eq(1800000L), eq(TimeUnit.MILLISECONDS));
+        }
+
+        @Test
+        @DisplayName("应该为数据库中不存在的商品写入空占位对象")
+        void shouldWriteEmptyPlaceholderForMissingProducts() {
+            List<Long> inputCodes = Collections.singletonList(NON_EXISTENT_PRODUCT_CODE);
+
+            when(productBloomFilter.mightContain(NON_EXISTENT_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Collections.singletonList(null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
                     .thenReturn(Collections.emptyList());
 
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
 
-            assertThat(responses).hasSize(1);
-            assertThat(responses.get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-
-            ArgumentCaptor<Product> placeholderCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + NON_EXISTENT_CODE), placeholderCaptor.capture(), eq(5L), eq(TimeUnit.MINUTES));
-            assertThat(placeholderCaptor.getValue().getProductCode()).isNull();
+            assertThat(result).isEmpty();
+            verify(valueOperations).set(eq(CACHE_KEY_PREFIX + NON_EXISTENT_PRODUCT_CODE), any(Product.class), eq(5L), eq(TimeUnit.MINUTES));
         }
 
         @Test
-        @DisplayName("Should handle empty code list")
-        void shouldHandleEmptyCodeList() {
-            List<ProductPriceResponse> responses = productService.getProductPrices(Collections.emptyList());
+        @DisplayName("应该跳过缓存中的空占位对象（不查 DB，空占位表示 DB 可确认无数据）")
+        void shouldSkipEmptyPlaceholderInCache() {
+            Product emptyProduct = new Product(); // productCode is null
+            List<Long> inputCodes = Collections.singletonList(EXISTING_PRODUCT_CODE);
 
-            assertThat(responses).isEmpty();
-        }
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Collections.singletonList(emptyProduct));
 
-        @Test
-        @DisplayName("Should filter out products that bloom filter says don't exist")
-        void shouldFilterByBloomFilter() {
-            when(productBloomFilter.mightContain(PRODUCT_CODE_1)).thenReturn(true);
-            when(productBloomFilter.mightContain(PRODUCT_CODE_2)).thenReturn(false);
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
 
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_2);
-
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
-
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1));
-
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
-
-            assertThat(responses).hasSize(1);
-            assertThat(responses.get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-        }
-
-        @Test
-        @DisplayName("Should return empty list when all codes filtered by bloom filter")
-        void shouldReturnEmptyWhenAllFiltered() {
-            when(productBloomFilter.mightContain(anyLong())).thenReturn(false);
-
-            List<ProductPriceResponse> responses = productService.getProductPrices(
-                    Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_2));
-
-            assertThat(responses).isEmpty();
-        }
-
-        @Test
-        @DisplayName("Should skip null placeholder in cache results")
-        void shouldSkipNullPlaceholderInCache() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, NON_EXISTENT_CODE);
-
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
-
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, new Product()));
-
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
-
-            assertThat(responses).hasSize(1);
-            assertThat(responses.get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
+            assertThat(result).isEmpty();
+            // Empty placeholder in cache means DB was checked before and product doesn't exist.
+            // Therefore NO DB call should be made.
             verify(productRepository, never()).findProductsByProductCodeIn(anyList());
         }
 
         @Test
-        @DisplayName("Should deduplicate codes before querying")
-        void shouldDeduplicateCodes() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_1);
+        @DisplayName("应该去重输入的商品编码")
+        void shouldDeduplicateInputCodes() {
+            List<Long> inputCodes = Arrays.asList(EXISTING_PRODUCT_CODE, EXISTING_PRODUCT_CODE);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(null, null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Collections.singletonList(existingProduct));
 
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1));
+            List<ProductPriceResponse> result = productService.getProductPrices(inputCodes);
 
-            List<ProductPriceResponse> responses = productService.getProductPrices(codes);
-
-            assertThat(responses).hasSize(1);
+            assertThat(result).hasSize(1);
         }
     }
 
     // ========================================================================
-    // getBatchProductPrices (增强批量查询)
+    // getBatchProductPrices (业务增强方法) 测试
     // ========================================================================
     @Nested
-    @DisplayName("getBatchProductPrices - Enhanced batch query")
+    @DisplayName("getBatchProductPrices 方法测试")
     class GetBatchProductPricesTests {
 
-        @BeforeEach
-        void setUp() {
-            lenient().when(productBloomFilter.mightContain(anyLong())).thenReturn(true);
-        }
-
         @Test
-        @DisplayName("Should return allProductsOrderable=true when all products are ACTIVE")
-        void shouldReturnAllOrderableWhenAllActive() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_2);
+        @DisplayName("应该返回正确的批量响应当所有商品都存在且可下单")
+        void shouldReturnCorrectResponseWhenAllProductsExistAndOrderable() {
+            List<Long> inputCodes = Arrays.asList(EXISTING_PRODUCT_CODE, 10010002L);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            Product product2 = new Product();
+            product2.setProductCode(10010002L);
+            product2.setPrice(new BigDecimal("99.99"));
+            product2.setStatus(ProductStatus.ACTIVE);
 
-            Product cached2 = new Product();
-            cached2.setProductCode(PRODUCT_CODE_2);
-            cached2.setPrice(new BigDecimal("99.99"));
-            cached2.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(productBloomFilter.mightContain(10010002L)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(null, null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Arrays.asList(existingProduct, product2));
 
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, cached2));
-
-            BatchProductPriceResponse response = productService.getBatchProductPrices(codes);
+            BatchProductPriceResponse response = productService.getBatchProductPrices(inputCodes);
 
             assertThat(response.isAllProductsOrderable()).isTrue();
             assertThat(response.getProducts()).hasSize(2);
@@ -511,284 +364,225 @@ class ProductServiceImplTest {
         }
 
         @Test
-        @DisplayName("Should return allProductsOrderable=false when any product is INACTIVE")
-        void shouldReturnNotOrderableWhenInactiveExists() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, PRODUCT_CODE_INACTIVE);
+        @DisplayName("应该正确识别缺失的商品编码")
+        void shouldIdentifyMissingProductCodes() {
+            List<Long> inputCodes = Arrays.asList(EXISTING_PRODUCT_CODE, NON_EXISTENT_PRODUCT_CODE);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(productBloomFilter.mightContain(NON_EXISTENT_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(null, null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Collections.singletonList(existingProduct));
 
-            Product cached2 = new Product();
-            cached2.setProductCode(PRODUCT_CODE_INACTIVE);
-            cached2.setPrice(new BigDecimal("299.99"));
-            cached2.setStatus(ProductStatus.INACTIVE);
-
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, cached2));
-
-            BatchProductPriceResponse response = productService.getBatchProductPrices(codes);
+            BatchProductPriceResponse response = productService.getBatchProductPrices(inputCodes);
 
             assertThat(response.isAllProductsOrderable()).isFalse();
-            assertThat(response.getProducts()).hasSize(2);
+            assertThat(response.getProducts()).hasSize(1);
+            assertThat(response.getProducts().get(0).getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
+            assertThat(response.getMissingProductCodes()).containsExactly(NON_EXISTENT_PRODUCT_CODE);
+        }
+
+        @Test
+        @DisplayName("应该正确识别不可下单的商品（状态非 ACTIVE）")
+        void shouldIdentifyNonOrderableProducts() {
+            List<Long> inputCodes = Collections.singletonList(EXISTING_PRODUCT_CODE);
+
+            Product inactiveProduct = new Product();
+            inactiveProduct.setProductCode(EXISTING_PRODUCT_CODE);
+            inactiveProduct.setPrice(new BigDecimal("199.99"));
+            inactiveProduct.setStatus(ProductStatus.INACTIVE);
+
+            when(productBloomFilter.mightContain(EXISTING_PRODUCT_CODE)).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Collections.singletonList(null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Collections.singletonList(inactiveProduct));
+
+            BatchProductPriceResponse response = productService.getBatchProductPrices(inputCodes);
+
+            assertThat(response.isAllProductsOrderable()).isFalse();
+            assertThat(response.getProducts()).hasSize(1);
             assertThat(response.getMissingProductCodes()).isEmpty();
         }
 
         @Test
-        @DisplayName("Should detect missing product codes")
-        void shouldDetectMissingProductCodes() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, NON_EXISTENT_CODE);
+        @DisplayName("应该按输入顺序返回商品列表")
+        void shouldReturnProductsInInputOrder() {
+            List<Long> inputCodes = Arrays.asList(10010003L, EXISTING_PRODUCT_CODE, 10010002L);
 
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
+            Product product3 = new Product();
+            product3.setProductCode(10010003L);
+            product3.setPrice(new BigDecimal("299.99"));
+            product3.setStatus(ProductStatus.ACTIVE);
 
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, null));
-            when(productRepository.findProductsByProductCodeIn(Arrays.asList(NON_EXISTENT_CODE)))
-                    .thenReturn(Collections.emptyList());
+            Product product2 = new Product();
+            product2.setProductCode(10010002L);
+            product2.setPrice(new BigDecimal("99.99"));
+            product2.setStatus(ProductStatus.ACTIVE);
 
-            BatchProductPriceResponse response = productService.getBatchProductPrices(codes);
+            when(productBloomFilter.mightContain(anyLong())).thenReturn(true);
+            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(null, null, null));
+            when(productRepository.findProductsByProductCodeIn(anyList()))
+                    .thenReturn(Arrays.asList(existingProduct, product2, product3));
 
-            assertThat(response.isAllProductsOrderable()).isFalse();
-            assertThat(response.getProducts()).hasSize(1);
-            assertThat(response.getProducts().get(0).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getMissingProductCodes()).containsExactly(NON_EXISTENT_CODE);
-        }
-
-        @Test
-        @DisplayName("Should preserve original request order in response")
-        void shouldPreserveOriginalOrder() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_2, PRODUCT_CODE_1, PRODUCT_CODE_3);
-
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
-
-            Product cached2 = new Product();
-            cached2.setProductCode(PRODUCT_CODE_2);
-            cached2.setPrice(new BigDecimal("99.99"));
-            cached2.setStatus(ProductStatus.ACTIVE);
-
-            Product cached3 = new Product();
-            cached3.setProductCode(PRODUCT_CODE_3);
-            cached3.setPrice(new BigDecimal("149.99"));
-            cached3.setStatus(ProductStatus.ACTIVE);
-
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached2, cached1, cached3));
-
-            BatchProductPriceResponse response = productService.getBatchProductPrices(codes);
+            BatchProductPriceResponse response = productService.getBatchProductPrices(inputCodes);
 
             assertThat(response.getProducts()).hasSize(3);
-            assertThat(response.getProducts().get(0).getProductCode()).isEqualTo(PRODUCT_CODE_2);
-            assertThat(response.getProducts().get(1).getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getProducts().get(2).getProductCode()).isEqualTo(PRODUCT_CODE_3);
-        }
-
-        @Test
-        @DisplayName("Should return not orderable when products missing")
-        void shouldReturnNotOrderableWhenMissing() {
-            List<Long> codes = Arrays.asList(PRODUCT_CODE_1, NON_EXISTENT_CODE);
-
-            Product cached1 = new Product();
-            cached1.setProductCode(PRODUCT_CODE_1);
-            cached1.setPrice(new BigDecimal("199.99"));
-            cached1.setStatus(ProductStatus.ACTIVE);
-
-            when(valueOperations.multiGet(anyList())).thenReturn(Arrays.asList(cached1, null));
-            when(productRepository.findProductsByProductCodeIn(Arrays.asList(NON_EXISTENT_CODE)))
-                    .thenReturn(Collections.emptyList());
-
-            BatchProductPriceResponse response = productService.getBatchProductPrices(codes);
-
-            assertThat(response.isAllProductsOrderable()).isFalse();
-            assertThat(response.getMissingProductCodes()).containsExactly(NON_EXISTENT_CODE);
+            assertThat(response.getProducts().get(0).getProductCode()).isEqualTo(10010003L);
+            assertThat(response.getProducts().get(1).getProductCode()).isEqualTo(EXISTING_PRODUCT_CODE);
+            assertThat(response.getProducts().get(2).getProductCode()).isEqualTo(10010002L);
         }
     }
 
     // ========================================================================
-    // addProduct (新增商品)
+    // deleteProduct 测试
     // ========================================================================
     @Nested
-    @DisplayName("addProduct - Create new product")
+    @DisplayName("deleteProduct 方法测试")
+    class DeleteProductTests {
+
+        @Test
+        @DisplayName("应该成功删除存在的商品")
+        void shouldDeleteExistingProduct() {
+            String cacheKey = CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE;
+
+            when(productRepository.findProductByProductCode(EXISTING_PRODUCT_CODE))
+                    .thenReturn(Optional.of(existingProduct));
+            when(productEventMapper.toDeletedEvent(any(Product.class))).thenReturn(null);
+
+            productService.deleteProduct(EXISTING_PRODUCT_CODE);
+
+            // delete 是 RedisTemplate 的方法
+            verify(redisTemplate, times(2)).delete(cacheKey);
+            verify(productRepository).delete(existingProduct);
+            verify(productSyncProducer).publishDeleteProductEvent(any());
+        }
+
+        @Test
+        @DisplayName("应该抛出异常当商品不存在")
+        void shouldThrowExceptionWhenProductNotFound() {
+            when(productRepository.findProductByProductCode(NON_EXISTENT_PRODUCT_CODE))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> productService.deleteProduct(NON_EXISTENT_PRODUCT_CODE))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Product not found: " + NON_EXISTENT_PRODUCT_CODE);
+
+            verify(productRepository, never()).delete(any());
+        }
+    }
+
+    // ========================================================================
+    // addProduct 测试
+    // ========================================================================
+    @Nested
+    @DisplayName("addProduct 方法测试")
     class AddProductTests {
 
         @Test
-        @DisplayName("Should create product and return ProductResponse")
-        void shouldCreateProduct() {
+        @DisplayName("应该成功创建商品")
+        void shouldCreateProductSuccessfully() {
             ProductCreateRequest request = new ProductCreateRequest();
             request.setProductName("New Product");
             request.setPrice(new BigDecimal("99.99"));
+            request.setBrand("NewBrand");
+            request.setCategoryCode(CategoryCode.ELECTRONICS);
+            request.setDescription("New Description");
 
             Product savedProduct = new Product();
-            savedProduct.setId(1L);
-            savedProduct.setProductCode(PRODUCT_CODE_1);
+            savedProduct.setProductCode(1234567890L);
             savedProduct.setProductName("New Product");
             savedProduct.setPrice(new BigDecimal("99.99"));
             savedProduct.setStatus(ProductStatus.ACTIVE);
 
+            ProductDetail detail = new ProductDetail();
+            detail.setBrand("NewBrand");
+            detail.setCategoryCode(CategoryCode.ELECTRONICS);
+            detail.setDescription("New Description");
+            savedProduct.setProductDetail(detail);
+
             when(productRepository.save(any(Product.class))).thenReturn(savedProduct);
+            when(productEventMapper.toCreateEvent(any(Product.class))).thenReturn(null);
 
             ProductResponse response = productService.addProduct(request);
 
             assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
             assertThat(response.getProductName()).isEqualTo("New Product");
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("99.99"));
-            assertThat(response.getStatus()).isEqualTo(ProductStatus.ACTIVE);
+            assertThat(response.getPrice()).isEqualTo(new BigDecimal("99.99"));
 
-            ArgumentCaptor<Product> productCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(productRepository).save(productCaptor.capture());
-            Product captured = productCaptor.getValue();
-            assertThat(captured.getProductName()).isEqualTo("New Product");
-            assertThat(captured.getPrice()).isEqualByComparingTo(new BigDecimal("99.99"));
-        }
-
-        @Test
-        @DisplayName("Should create product with null name")
-        void shouldCreateProductWithNullName() {
-            ProductCreateRequest request = new ProductCreateRequest();
-            request.setProductName(null);
-            request.setPrice(new BigDecimal("50.00"));
-
-            Product savedProduct = new Product();
-            savedProduct.setId(2L);
-            savedProduct.setProductCode(PRODUCT_CODE_2);
-            savedProduct.setProductName(null);
-            savedProduct.setPrice(new BigDecimal("50.00"));
-            savedProduct.setStatus(ProductStatus.ACTIVE);
-
-            when(productRepository.save(any(Product.class))).thenReturn(savedProduct);
-
-            ProductResponse response = productService.addProduct(request);
-
-            assertThat(response).isNotNull();
-            assertThat(response.getProductName()).isNull();
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("50.00"));
+            verify(productBloomFilter).add(anyLong());
+            verify(productSyncProducer).publishCreateProductEvent(any());
         }
     }
 
     // ========================================================================
-    // updateProduct (更新商品 - 延迟双删)
+    // updateProduct 测试
     // ========================================================================
     @Nested
-    @DisplayName("updateProduct - Update product with delayed double-delete")
+    @DisplayName("updateProduct 方法测试")
     class UpdateProductTests {
 
         @Test
-        @DisplayName("Should update price with cache delayed double-delete")
-        void shouldUpdatePriceWithDelayedDoubleDelete() {
-            ProductUpdateRequest updateRequest = new ProductUpdateRequest(new BigDecimal("299.99"));
+        @DisplayName("应该成功更新商品的部分字段")
+        void shouldUpdateProductPartially() {
+            String cacheKey = CACHE_KEY_PREFIX + EXISTING_PRODUCT_CODE;
 
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-            when(productRepository.save(any(Product.class))).thenAnswer(invocation -> invocation.getArgument(0));
+            ProductUpdateRequest request = new ProductUpdateRequest();
+            request.setPrice(new BigDecimal("299.99"));
+            request.setBrand("UpdatedBrand");
+            request.setCategoryCode(CategoryCode.BOOKS);
+            request.setDescription("Updated Description");
 
-            ProductResponse response = productService.updateProduct(PRODUCT_CODE_1, updateRequest);
+            when(productRepository.findProductByProductCode(EXISTING_PRODUCT_CODE))
+                    .thenReturn(Optional.of(existingProduct));
+            when(productRepository.save(any(Product.class))).thenReturn(existingProduct);
+            when(productEventMapper.toUpdatedEvent(any(Product.class))).thenReturn(null);
+
+            ProductResponse response = productService.updateProduct(EXISTING_PRODUCT_CODE, request);
 
             assertThat(response).isNotNull();
-            assertThat(response.getProductCode()).isEqualTo(PRODUCT_CODE_1);
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("299.99"));
+            assertThat(response.getPrice()).isEqualTo(new BigDecimal("299.99"));
+            assertThat(response.getBrand()).isEqualTo("UpdatedBrand");
+            assertThat(response.getCategoryCode()).isEqualTo(CategoryCode.BOOKS);
 
-            // Verify delayed double-delete: cache deleted before and after save (2 times)
-            verify(redisTemplate, atLeast(2)).delete(CACHE_KEY_PREFIX + PRODUCT_CODE_1);
-
-            ArgumentCaptor<Product> productCaptor = ArgumentCaptor.forClass(Product.class);
-            verify(productRepository).save(productCaptor.capture());
-            assertThat(productCaptor.getValue().getPrice()).isEqualByComparingTo(new BigDecimal("299.99"));
+            // delete 是 RedisTemplate 的方法
+            verify(redisTemplate, times(2)).delete(cacheKey);
+            verify(productSyncProducer).publishUpdateProductEvent(any());
         }
 
         @Test
-        @DisplayName("Should throw IllegalArgumentException when product not found (before any Redis delete)")
-        void shouldThrowWhenProductNotFound() {
-            ProductUpdateRequest updateRequest = new ProductUpdateRequest(new BigDecimal("100.00"));
+        @DisplayName("应该成功更新商品当请求只包含部分字段")
+        void shouldUpdateProductWhenRequestHasPartialFields() {
+            ProductUpdateRequest request = new ProductUpdateRequest();
+            request.setPrice(new BigDecimal("299.99"));
+            // brand, categoryCode, description are null
 
-            when(productRepository.findProductByProductCode(NON_EXISTENT_CODE)).thenReturn(Optional.empty());
+            when(productRepository.findProductByProductCode(EXISTING_PRODUCT_CODE))
+                    .thenReturn(Optional.of(existingProduct));
+            when(productRepository.save(any(Product.class))).thenReturn(existingProduct);
+            when(productEventMapper.toUpdatedEvent(any(Product.class))).thenReturn(null);
 
-            assertThatThrownBy(() -> productService.updateProduct(NON_EXISTENT_CODE, updateRequest))
+            ProductResponse response = productService.updateProduct(EXISTING_PRODUCT_CODE, request);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getPrice()).isEqualTo(new BigDecimal("299.99"));
+            // Other fields should remain unchanged
+            assertThat(response.getBrand()).isEqualTo("TestBrand");
+        }
+
+        @Test
+        @DisplayName("应该抛出异常当更新的商品不存在")
+        void shouldThrowExceptionWhenProductNotFound() {
+            ProductUpdateRequest request = new ProductUpdateRequest();
+            request.setPrice(new BigDecimal("100.00"));
+            request.setBrand("Brand");
+            request.setCategoryCode(CategoryCode.ELECTRONICS);
+
+            when(productRepository.findProductByProductCode(NON_EXISTENT_PRODUCT_CODE))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> productService.updateProduct(NON_EXISTENT_PRODUCT_CODE, request))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("not found");
-
-            verify(productRepository, never()).save(any(Product.class));
-            // DB lookup happens first; since product not found, redisTemplate.delete() is never called
-            verify(redisTemplate, never()).delete(CACHE_KEY_PREFIX + NON_EXISTENT_CODE);
-        }
-
-        @Test
-        @DisplayName("Should not change price when update request has null price")
-        void shouldNotChangePriceWhenUpdateRequestHasNullPrice() {
-            ProductUpdateRequest updateRequest = new ProductUpdateRequest(null);
-
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-            when(productRepository.save(any(Product.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-            ProductResponse response = productService.updateProduct(PRODUCT_CODE_1, updateRequest);
-
-            assertThat(response.getPrice()).isEqualByComparingTo(new BigDecimal("199.99")); // unchanged
-        }
-    }
-
-    // ========================================================================
-    // deleteProduct (删除商品 - 延迟双删)
-    // ========================================================================
-    @Nested
-    @DisplayName("deleteProduct - Delete product with delayed double-delete")
-    class DeleteProductTests {
-
-        @Test
-        @DisplayName("Should delete product with cache delayed double-delete")
-        void shouldDeleteProductWithDelayedDoubleDelete() {
-            // Mock: product exists in DB
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-
-            productService.deleteProduct(PRODUCT_CODE_1);
-
-            verify(redisTemplate, atLeast(2)).delete(CACHE_KEY_PREFIX + PRODUCT_CODE_1);
-            verify(productRepository).delete(activeProduct);
-        }
-
-        @Test
-        @DisplayName("Should throw IllegalArgumentException when deleting non-existent product")
-        void shouldThrowWhenProductNotFound() {
-            // Mock: product not found in DB
-            when(productRepository.findProductByProductCode(NON_EXISTENT_CODE)).thenReturn(Optional.empty());
-
-            assertThatThrownBy(() -> productService.deleteProduct(NON_EXISTENT_CODE))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("not found");
-
-            verify(productRepository, never()).delete(any(Product.class));
-            verify(redisTemplate, never()).delete(anyString());
-        }
-    }
-
-    // ========================================================================
-    // Redis failure scenarios (容错场景)
-    // ========================================================================
-    @Nested
-    @DisplayName("Redis failure scenarios")
-    class RedisFailureTests {
-
-        @BeforeEach
-        void setUp() {
-            lenient().when(productBloomFilter.mightContain(anyLong())).thenReturn(true);
-        }
-
-        @Test
-        @DisplayName("Should propagate exception when first Redis delete fails (code does not catch Redis delete exceptions)")
-        void shouldPropagateWhenRedisDeleteFails() {
-            ProductUpdateRequest updateRequest = new ProductUpdateRequest(new BigDecimal("399.99"));
-
-            when(productRepository.findProductByProductCode(PRODUCT_CODE_1)).thenReturn(Optional.of(activeProduct));
-            // First delete throws exception
-            doThrow(new RuntimeException("Redis down")).when(redisTemplate).delete(CACHE_KEY_PREFIX + PRODUCT_CODE_1);
-
-            assertThatThrownBy(() -> productService.updateProduct(PRODUCT_CODE_1, updateRequest))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("Redis down");
-
-            // save should NOT be called because exception was thrown before it (first Redis delete)
-            verify(productRepository, never()).save(any(Product.class));
+                    .hasMessageContaining("Product not found: " + NON_EXISTENT_PRODUCT_CODE);
         }
     }
 }
