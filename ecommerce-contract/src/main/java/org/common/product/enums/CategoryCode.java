@@ -15,6 +15,7 @@ public enum CategoryCode {
     SMARTWATCH,
     GAMING_CONSOLE,
     ACCESSORY,
+    ELECTRONICS,
 
     // ========== 电脑硬件 ==========
     CPU,
@@ -74,5 +75,5 @@ public enum CategoryCode {
 
     // ========== 其他 ==========
     PET_SUPPLIES,
-    UNKNOWN
+    BOOKS, UNKNOWN
 }
