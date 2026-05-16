@@ -16,7 +16,7 @@ public class ProductCreateRequest {
     // --- Product 表字段 ---
     @NotBlank
     private String productName;
-    @NotBlank
+    @NotNull
     private BigDecimal price;
 
     // --- ProductDetail 表字段
