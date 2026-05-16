@@ -9,11 +9,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.SearchHits;
-import org.springframework.data.elasticsearch.core.SearchPage;
 import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.stereotype.Service;
-import org.springframework.data.elasticsearch.client.elc.ElasticsearchTemplate;
 
 import java.util.List;
 
@@ -21,7 +19,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ProductSearchServiceImpl implements ProductSearchService {
 
-    private final ElasticsearchTemplate elasticsearchTemplate;
+    private final ElasticsearchOperations elasticsearchOperations;
 
     @Override
     public List<ProductDoc> searchProducts(ProductSearchRequest request){
@@ -71,7 +69,7 @@ public class ProductSearchServiceImpl implements ProductSearchService {
 
 
         // 执行查询，拿到结果
-        SearchHits<ProductDoc> searchHits = elasticsearchTemplate.search(query,ProductDoc.class);
+        SearchHits<ProductDoc> searchHits = elasticsearchOperations.search(query,ProductDoc.class);
 
         return searchHits.stream()
                 .map(SearchHit::getContent)
