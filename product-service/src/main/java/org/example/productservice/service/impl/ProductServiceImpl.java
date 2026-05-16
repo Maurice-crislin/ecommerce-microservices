@@ -352,18 +352,19 @@ public class ProductServiceImpl implements ProductService {
             product.setPrice(productUpdateRequest.getPrice());
         }
 
-        ProductDetail detail = new ProductDetail();
-
-        if(detail != null){
-            if(productUpdateRequest.getBrand() != null){
-                detail.setBrand(productUpdateRequest.getBrand());
-            }
-            if(productUpdateRequest.getCategoryCode() != null){
-                detail.setCategoryCode(productUpdateRequest.getCategoryCode());
-            }
-            if(productUpdateRequest.getDescription() != null){
-                detail.setDescription(productUpdateRequest.getDescription());
-            }
+        ProductDetail detail = product.getProductDetail();
+        if (detail == null) {
+            detail = new ProductDetail();
+            product.setProductDetail(detail);
+        }
+        if(productUpdateRequest.getBrand() != null){
+            detail.setBrand(productUpdateRequest.getBrand());
+        }
+        if(productUpdateRequest.getCategoryCode() != null){
+            detail.setCategoryCode(productUpdateRequest.getCategoryCode());
+        }
+        if(productUpdateRequest.getDescription() != null){
+            detail.setDescription(productUpdateRequest.getDescription());
         }
 
 
