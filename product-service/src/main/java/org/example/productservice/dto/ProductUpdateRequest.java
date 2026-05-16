@@ -17,9 +17,7 @@ public class ProductUpdateRequest {
     private BigDecimal price;
 
     // --- ProductDetail 表字段
-    @NotBlank
     private String brand;
     private String description;
-    @NotNull
     private CategoryCode categoryCode;
 }
