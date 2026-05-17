@@ -12,16 +12,51 @@ import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.HashMap;
+import java.util.Map;
 
 
 @Configuration
 public class RabbitMQConfig {
 
+    public static final String INVENTORY_DLX_EXCHANGE = "inventory.dlx.exchange";
+
+    public static final String INVENTORY_UNLOCK_DLX_QUEUE = "inventory_unlock_queue.dlq";
+
+    public static final String INVENTORY_CONFIRM_DLX_QUEUE = "inventory_confirm_queue.dlq";
+    @Bean
+    public DirectExchange inventoryDLXExchange() {
+        return new DirectExchange(INVENTORY_DLX_EXCHANGE);
+    }
+    @Bean
+    public Queue inventoryUnlockDlqQueue() {
+        return new Queue(INVENTORY_UNLOCK_DLX_QUEUE);
+    }
+
+    @Bean
+    public Queue inventoryConfirmDlqQueue() {
+        return new Queue(INVENTORY_CONFIRM_DLX_QUEUE);
+    }
+
+    @Bean
+    public Binding inventoryUnlockDlqBinding() {
+        return BindingBuilder
+                .bind(inventoryUnlockDlqQueue())
+                .to(inventoryDLXExchange())
+                .with(INVENTORY_UNLOCK_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding inventoryConfirmDlqBinding() {
+        return BindingBuilder
+                .bind(inventoryConfirmDlqQueue())
+                .to(inventoryDLXExchange())
+                .with(INVENTORY_CONFIRM_ROUTING_KEY);
+    }
 
     public static final String INVENTORY_UNLOCK_EXCHANGE = "inventory_unlock_exchange";
     public static final String INVENTORY_UNLOCK_QUEUE = "inventory_unlock_queue";
     public static final String INVENTORY_UNLOCK_ROUTING_KEY = "inventory_unlock_routing_key";
-
 
     @Bean
     public  DirectExchange inventoryUnlockExchange(){
@@ -29,7 +64,10 @@ public class RabbitMQConfig {
     }
     @Bean
     public Queue inventoryUnlockQueue(){
-        return new Queue(INVENTORY_UNLOCK_QUEUE);
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", INVENTORY_DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", INVENTORY_UNLOCK_ROUTING_KEY);
+        return new Queue(INVENTORY_UNLOCK_QUEUE, true, false, false, args);
     }
     @Bean
     public Binding inventoryUnlockBinding(){
@@ -49,7 +87,10 @@ public class RabbitMQConfig {
     }
     @Bean
     public Queue inventoryConfirmQueue(){
-        return new Queue(INVENTORY_CONFIRM_QUEUE);
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-dead-letter-exchange", INVENTORY_DLX_EXCHANGE);
+        args.put("x-dead-letter-routing-key", INVENTORY_CONFIRM_ROUTING_KEY);
+        return new Queue(INVENTORY_CONFIRM_QUEUE, true, false, false, args);
     }
     @Bean
     public Binding inventoryConfirmBinding(){
@@ -104,7 +145,7 @@ public class RabbitMQConfig {
 
         factory.setMessageConverter(jacksonMessageConverter);
 
-        // 可选但推荐
+        // 只要 Listener 抛出异常且未被捕获，就会自动触发这个机制进入死信。
         factory.setDefaultRequeueRejected(false);
 
         return factory;
