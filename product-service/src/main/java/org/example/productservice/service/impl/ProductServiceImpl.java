@@ -375,6 +375,7 @@ public class ProductServiceImpl implements ProductService {
         // 再改db 两张表都更新了
         Product savedProduct = productRepository.save(product);
 
+        // 全量更新
         productSyncProducer.publishUpdateProductEvent(
                 productEventMapper.toUpdatedEvent(savedProduct)
         );
