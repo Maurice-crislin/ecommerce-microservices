@@ -15,11 +15,13 @@ import org.springframework.stereotype.Component;
 public class InventoryEventListener {
     private final InventoryService inventoryService;
 
-    // OperationProcessingException 另一线程正在处理中( Redis/DB 查到 PROCESSING 状态时) 临时竞争状态，等赢家完成即可
-    // OptimisticLockingFailureException 乐观锁冲突（batchLogic 抛出 是Inventory业务代码的 不是幂等控制表的） 临时冲突，重试即可
-    @RabbitListener(queues = RabbitMQConfig.INVENTORY_UNLOCK_QUEUE)
+     /**
+      * OperationProcessingException 另一线程正在处理中( Redis/DB 查到 PROCESSING 状态时) 临时竞争状态，等赢家完成即可
+        OptimisticLockingFailureException 乐观锁冲突（batchLogic 抛出 是Inventory业务代码的 不是幂等控制表的） 临时冲突，重试即可
+      */
+    @RabbitListener(queues = RabbitMQConfig.INVENTORY_UNLOCK_QUEUE,containerFactory = "rabbitListenerContainerFactory")
     @Retryable(
-            value = {OptimisticLockingFailureException.class, OperationProcessingException.class},
+            retryFor = {OptimisticLockingFailureException.class, OperationProcessingException.class},
             maxAttempts = 5,
             backoff = @Backoff(delay = 2000, multiplier = 2)
     )
@@ -28,9 +30,11 @@ public class InventoryEventListener {
         inventoryService.batchUnlockStockWithIdempotency(inventoryBatchEvent);
 
     }
-    @RabbitListener(queues = RabbitMQConfig.INVENTORY_CONFIRM_QUEUE)
+
+    // @Retryable 实现本地内存重试（不经过 MQ 重新投递，节省网络和 MQ 性能）
+    @RabbitListener(queues = RabbitMQConfig.INVENTORY_CONFIRM_QUEUE,containerFactory = "rabbitListenerContainerFactory")
     @Retryable(
-            value = {OptimisticLockingFailureException.class, OperationProcessingException.class},
+            retryFor = {OptimisticLockingFailureException.class, OperationProcessingException.class},
             maxAttempts = 5,
             backoff = @Backoff(delay = 2000, multiplier = 2)
     )
