@@ -1,6 +1,5 @@
 package org.example.inventoryservice.messaging;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
@@ -73,7 +72,9 @@ public class RabbitMQConfig {
 
         // create TypeMapper and setTrustedPackages
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
-        typeMapper.setTrustedPackages("org.common");
+        // 匹配 dto 包及其子包（Spring AMQP 底层是 startsWith 判断）
+        // typeMapper.setTrustedPackages("org.common.inventory.dto");
+        typeMapper.setTrustedPackages("*");
 
         converter.setJavaTypeMapper(typeMapper);
         template.setMessageConverter(converter);
@@ -95,7 +96,12 @@ public class RabbitMQConfig {
 
         factory.setConnectionFactory(connectionFactory);
 
-        // 🔥 关键：给 Listener 指定 Jackson Converter
+        // 关键：给 Listener 指定 Jackson Converter（同样需要配置 trustedPackages）
+        DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+        // typeMapper.setTrustedPackages("org.common.*");
+        typeMapper.setTrustedPackages("*");
+        jacksonMessageConverter.setJavaTypeMapper(typeMapper);
+
         factory.setMessageConverter(jacksonMessageConverter);
 
         // 可选但推荐
@@ -105,4 +111,3 @@ public class RabbitMQConfig {
     }
 
 }
-
