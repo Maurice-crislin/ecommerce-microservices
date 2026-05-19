@@ -55,7 +55,7 @@ public class RabbitMQConfig {
     }
 
     public static final String INVENTORY_UNLOCK_EXCHANGE = "inventory_unlock_exchange";
-    public static final String INVENTORY_UNLOCK_QUEUE = "inventory_unlock_queue";
+    public static final String INVENTORY_UNLOCK_QUEUE = "inventory_unlock_queue_v2";
     public static final String INVENTORY_UNLOCK_ROUTING_KEY = "inventory_unlock_routing_key";
 
     @Bean
@@ -78,7 +78,7 @@ public class RabbitMQConfig {
     }
 
     public static final String INVENTORY_CONFIRM_EXCHANGE = "inventory_confirm_exchange";
-    public static final String INVENTORY_CONFIRM_QUEUE = "inventory_confirm_queue";
+    public static final String INVENTORY_CONFIRM_QUEUE = "inventory_confirm_queue_v2";
     public static final String INVENTORY_CONFIRM_ROUTING_KEY = "inventory_confirm_routing_key";
 
     @Bean
