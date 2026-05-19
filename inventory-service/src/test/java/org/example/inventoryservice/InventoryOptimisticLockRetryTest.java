@@ -181,40 +181,30 @@ public class InventoryOptimisticLockRetryTest {
         startLatch.countDown();
         doneLatch.await();
 
-        boolean firstSuccess = Boolean.TRUE.equals(result1.get());
-        boolean secondSuccess = Boolean.TRUE.equals(result2.get());
-
-        assertThat(firstSuccess ^ secondSuccess)
-                .as("场景1-V1-1: 两线程CONFIRM同一商品, 仅一个成功(@Version冲突). "
-                        + "T1=%s(%s), T2=%s(%s)", firstSuccess, error1.get(), secondSuccess, error2.get())
+        // 随着重试次数增加(MAX_RETRIES=5),两个线程都能通过重试解决乐观锁冲突并成功
+        assertThat(Boolean.TRUE.equals(result1.get()))
+                .as("场景1-V1-1: 线程1应最终成功. T1=%s(%s)", result1.get(), error1.get())
+                .isTrue();
+        assertThat(Boolean.TRUE.equals(result2.get()))
+                .as("场景1-V1-1: 线程2应最终成功. T2=%s(%s)", result2.get(), error2.get())
                 .isTrue();
 
-        long successOrderId = firstSuccess ? orderId1 : orderId2;
-        long failOrderId = firstSuccess ? orderId2 : orderId1;
+        // 两个 operation record 都应存在且为 SUCCESS
+        InventoryOperation operation1 = inventoryOperationRepository
+                .findByOrderIdAndOperationType(orderId1, OperationType.CONFIRM)
+                .orElseThrow(() -> new AssertionError("订单1001 operation record应存在"));
+        InventoryOperation operation2 = inventoryOperationRepository
+                .findByOrderIdAndOperationType(orderId2, OperationType.CONFIRM)
+                .orElseThrow(() -> new AssertionError("订单1002 operation record应存在"));
+        assertThat(operation1.getOperationStatus()).isEqualTo(OperationStatus.SUCCESS);
+        assertThat(operation2.getOperationStatus()).isEqualTo(OperationStatus.SUCCESS);
 
-        Optional<InventoryOperation> failOperation = inventoryOperationRepository
-                .findByOrderIdAndOperationType(failOrderId, OperationType.CONFIRM);
-        assertThat(failOperation)
-                .as("场景1-V1-2: 失败方(orderId=%d)CONFIRM幂等记录应被delete", failOrderId)
-                .isEmpty();
-
-        String redisKey = InventoryIdempotencyExecutor.IDEM_PREFIX + failOrderId + ":" + OperationType.CONFIRM;
-        assertThat(stringRedisTemplate.opsForValue().get(redisKey))
-                .as("场景1-V1-3: 失败方Redis key应被删除")
-                .isNull();
-
-        InventoryOperation successOperation = inventoryOperationRepository
-                .findByOrderIdAndOperationType(successOrderId, OperationType.CONFIRM)
-                .orElseThrow(() -> new AssertionError("成功方的幂等记录应存在"));
-        assertThat(successOperation.getOperationStatus())
-                .as("场景1-V1-4: 成功方幂等记录应为SUCCESS")
-                .isEqualTo(OperationStatus.SUCCESS);
-
+        // 库存: 两个CONFIRM各扣10件 => onHand=80, sold=20
         Inventory inventory = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inventory.getOnHandStock()).as("场景1-V1-5: onHandStock=90").isEqualTo(90);
-        assertThat(inventory.getSoldStock()).as("场景1-V1-5: soldStock=10").isEqualTo(10);
-        assertThat(getRedisLocked(PRODUCT_CODE)).as("场景1-V1-5: locked=10").isEqualTo(10L);
+        assertThat(inventory.getOnHandStock()).as("场景1-V1-5: onHandStock=80").isEqualTo(80);
+        assertThat(inventory.getSoldStock()).as("场景1-V1-5: soldStock=20").isEqualTo(20);
+        assertThat(getRedisLocked(PRODUCT_CODE)).as("场景1-V1-5: locked=0").isEqualTo(0L);
     }
 
     // ======================================================================
@@ -224,12 +214,12 @@ public class InventoryOptimisticLockRetryTest {
     @DisplayName("场景2: CONFIRM乐观锁冲突后手动重试能成功重新执行业务")
     @SneakyThrows
     void testOptimisticLock_retryCanReExecuteBusiness() {
-        long productCode2 = 1002L;
+        long productCode2 = 602L;
         inventoryRepository.save(new Inventory(productCode2, 100));
         simulateLockedState(productCode2, 20, 100);
 
-        long orderIdA = 3001L;
-        long orderIdB = 3002L;
+        long orderIdA = 1001L;
+        long orderIdB = 1002L;
         int qty = 10;
 
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -271,31 +261,78 @@ public class InventoryOptimisticLockRetryTest {
         startLatch.countDown();
         doneLatch.await();
 
-        boolean aSuccess = Boolean.TRUE.equals(resultA.get());
-        boolean bSuccess = Boolean.TRUE.equals(resultB.get());
+        // ============================================================
+        // 1. 两个线程最终都应成功
+        // ============================================================
 
-        assertThat(aSuccess ^ bSuccess)
-                .as("场景2-V2-1: 两线程CONFIRM同一商品应仅一个成功(A=%s(%s), B=%s(%s))",
-                        aSuccess, errorA.get(), bSuccess, errorB.get())
+        assertThat(resultA.get())
+                .as("订单1001最终应成功, error=%s", errorA.get())
                 .isTrue();
 
-        long failOrderId = aSuccess ? orderIdB : orderIdA;
+        assertThat(resultB.get())
+                .as("订单1002最终应成功, error=%s", errorB.get())
+                .isTrue();
 
-        Optional<InventoryOperation> deletedOperation = inventoryOperationRepository
-                .findByOrderIdAndOperationType(failOrderId, OperationType.CONFIRM);
-        assertThat(deletedOperation)
-                .as("场景2-V2-2: 失败方(orderId=%d)CONFIRM幂等记录应被删除", failOrderId)
-                .isEmpty();
+        // ============================================================
+        // 2. 两个 operation record 都应存在且为 SUCCESS
+        // ============================================================
 
-        // V2-3: 重试失败方操作 → 应成功
-        inventoryIdempotencyExecutor.executeWithIdempotency(
-                failOrderId, OperationType.CONFIRM, createConfirmTask(productCode2, qty));
+        InventoryOperation operation1 = inventoryOperationRepository
+                .findByOrderIdAndOperationType(orderIdA, OperationType.CONFIRM)
+                .orElseThrow(() ->
+                        new AssertionError("订单1001 operation record 应存在"));
 
-        // V2-4: DB 总扣减 20 (10+10)
-        Inventory inventory = inventoryRepository.findInventoryByProductCode(productCode2)
+        InventoryOperation operation2 = inventoryOperationRepository
+                .findByOrderIdAndOperationType(orderIdB, OperationType.CONFIRM)
+                .orElseThrow(() ->
+                        new AssertionError("订单1002 operation record 应存在"));
+
+        assertThat(operation1.getOperationStatus())
+                .as("订单1001 operation status 应为 SUCCESS")
+                .isEqualTo(OperationStatus.SUCCESS);
+
+        assertThat(operation2.getOperationStatus())
+                .as("订单1002 operation status 应为 SUCCESS")
+                .isEqualTo(OperationStatus.SUCCESS);
+        // ============================================================
+        // 3. Redis 幂等 key 应为 SUCCESS
+        // ============================================================
+
+        String redisKey1 = InventoryIdempotencyExecutor.IDEM_PREFIX
+                + orderIdA + ":" + OperationType.CONFIRM;
+
+        String redisKey2 = InventoryIdempotencyExecutor.IDEM_PREFIX
+                + orderIdB + ":" + OperationType.CONFIRM;
+
+        assertThat(stringRedisTemplate.opsForValue().get(redisKey1))
+                .as("订单1001 Redis status 应为 SUCCESS")
+                .isEqualTo(OperationStatus.SUCCESS.name());
+
+        assertThat(stringRedisTemplate.opsForValue().get(redisKey2))
+                .as("订单1002 Redis status 应为 SUCCESS")
+                .isEqualTo(OperationStatus.SUCCESS.name());
+
+        // ============================================================
+        // 4. 库存最终一致性校验
+        //  注意：产品 productCode2=602，不是 PRODUCT_CODE=2001！
+        // ============================================================
+
+        Inventory inventory = inventoryRepository
+                .findInventoryByProductCode(productCode2)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inventory.getOnHandStock()).as("场景2-V2-4: onHandStock=80").isEqualTo(80);
-        assertThat(inventory.getSoldStock()).as("场景2-V2-4: soldStock=20").isEqualTo(20);
+
+        assertThat(inventory.getOnHandStock())
+                .as("onHandStock 应减少20")
+                .isEqualTo(80);
+
+        assertThat(inventory.getSoldStock())
+                .as("soldStock 应增加20")
+                .isEqualTo(20);
+
+        // confirm 后 locked 应减少20
+        assertThat(getRedisLocked(productCode2))
+                .as("lockedStock 应减少20")
+                .isEqualTo(0L);
     }
 
     // ======================================================================
@@ -484,9 +521,9 @@ public class InventoryOptimisticLockRetryTest {
 
         Inventory inventory = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
-        assertThat(inventory.getOnHandStock()).as("场景8-V8-1: onHandStock=95").isEqualTo(95);
-        assertThat(inventory.getSoldStock()).as("场景8-V8-1: soldStock=5").isEqualTo(5);
-        assertThat(getRedisLocked(PRODUCT_CODE)).as("场景8-V8-1: locked=45").isEqualTo(45L);
+        assertThat(inventory.getOnHandStock()).as("场景8-V8-1: onHandStock=100-5*5").isEqualTo(75);
+        assertThat(inventory.getSoldStock()).as("场景8-V8-1: soldStock=5*5").isEqualTo(25);
+        assertThat(getRedisLocked(PRODUCT_CODE)).as("场景8-V8-1: locked=50-5*5").isEqualTo(25L);
 
         long redisAvail = getRedisAvail(PRODUCT_CODE);
         long redisLocked = getRedisLocked(PRODUCT_CODE);

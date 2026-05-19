@@ -23,6 +23,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 
 /**
  * =====================================================================
@@ -38,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *    T3: 连续5次抛 OptimisticLock → deleteOperation → 第6次手动重试成功
  *    T4: 幂等并发控制 → 5线程同 orderId → 仅1次业务
  * =====================================================================
+ *
+ *  注意：T4 有5个并发线程，必须最后运行，否则 T4 的线程可能干扰其他测试的 @BeforeEach 清理。
  */
 @SpringBootTest
 public class InventoryOptimisticLockDeterministicTest {
