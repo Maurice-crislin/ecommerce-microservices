@@ -142,8 +142,8 @@ public class InventoryConcurrencyApiTests {
         startLatch.countDown();
         doneLatch.await();
 
-        // 幂等控制：只有一次真正成功
-        assertThat(successCount.get()).isEqualTo(1);
+        // 幂等控制：只有一次真正成功,但十次都是返回表面成功
+        assertThat(successCount.get()).isEqualTo(10);
 
         // DB onHandStock 不变 (LOCK doesn't touch DB)
         Inventory inv1 = inventoryRepository.findInventoryByProductCode(1001L).get();
