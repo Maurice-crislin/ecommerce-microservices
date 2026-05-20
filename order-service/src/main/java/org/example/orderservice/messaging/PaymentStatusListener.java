@@ -35,7 +35,7 @@ public class PaymentStatusListener {
             RefundResponse refundResponse = paymentClient.refund(message.getPaymentNo());
             return;
         }
-        order.setOrderStatus(OrderStatus.PAID);
+        order.pay();
         orderRepository.save(order);
 
         // batch notice confirm sale
@@ -53,7 +53,7 @@ public class PaymentStatusListener {
         Long orderId = message.getOrderId();
         Order order = orderRepository.findById(orderId).orElseThrow(()->new IllegalArgumentException("Order id not found"));
 
-        order.setOrderStatus(OrderStatus.FAILED);
+        order.fail();
         orderRepository.save(order);
 
         // batch notice unlock inventory
