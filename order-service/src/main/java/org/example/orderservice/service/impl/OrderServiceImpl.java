@@ -75,10 +75,8 @@ public class OrderServiceImpl implements OrderService {
                 .collect(Collectors.toMap(ProductPriceResponse::getProductCode, ProductPriceResponse::getPrice));
 
         // 4. create order and orderitems
-        Order order = new Order();
-        order.setOrderId(orderId);
-        order.setUserId(userId);
-        order.setOrderStatus(OrderStatus.PROCESSING);
+        Order order = new Order(orderId,userId);
+        order.initState();
 
 
         List<OrderItem> orderItems = stockRequestList.stream().map(stockRequest -> {
