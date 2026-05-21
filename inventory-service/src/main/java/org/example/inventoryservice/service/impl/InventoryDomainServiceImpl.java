@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.example.inventoryservice.domain.Inventory;
 import org.example.inventoryservice.repository.InventoryRepository;
@@ -30,6 +31,7 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
     private final DefaultRedisScript<Long> unlockScript;
     private final DefaultRedisScript<Long> confirmScript;
     private final StringRedisTemplate  stringRedisTemplate;
+    private final EntityManager entityManager;
 
 
     @Override
@@ -100,7 +102,7 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
 
         Map<Long,Inventory> inventoryMap = inventoryList.stream().collect(Collectors.toMap(Inventory::getProductCode, inv->inv));
 
-        List<StockRequest> confirmedSuccessfully = new ArrayList<>();
+        List<StockRequest> redisSuccessfully = new ArrayList<>();
         List<InventoryLog> logList = new ArrayList<>();
 
         try {
@@ -113,36 +115,58 @@ public class InventoryDomainServiceImpl implements InventoryDomainService {
                 // db onhand-- sold++
                 inventory.confirmSale(quantity);
 
-                // redis lua locked--
-                Long result = stringRedisTemplate.execute(confirmScript,
-                        List.of(RedisKeys.lockedStockKey(productCode))
-                        , String.valueOf(quantity));
-
-                if (result == 0) {
-                    throw new IllegalArgumentException("Confirm failed: insufficient locked stock for product: " + productCode);
-                }
-
-                confirmedSuccessfully.add(stockRequest);
                 InventoryLog inventoryLog = new InventoryLog(productCode, quantity, orderId, OperationType.CONFIRM);
                 logList.add(inventoryLog);
             }
 
             inventoryLogRepository.saveAll(logList);
 
+            // Force flush to DB now. If OptimisticLockFailure occurs, it will happen HERE,
+            // still inside the try-catch block. Redis has NOT been touched yet, so we can
+            // safely delete the PROCESSING idempotency record and retry.
+            entityManager.flush();
+
+            // DB flush succeeded (no OptimisticLockFailure, no constraint violation),
+            // execute Redis operations.
+            for (StockRequest stockRequest : stockRequestList) {
+                Long productCode = stockRequest.getProductCode();
+                Integer quantity = stockRequest.getQuantity();
+
+                Long result = stringRedisTemplate.execute(confirmScript,
+                        List.of(RedisKeys.lockedStockKey(productCode))
+                        , String.valueOf(quantity));
+
+                if (result == 0) {
+                    // Redis locked insufficient — this should not happen if validateAndLockStock worked
+                    // But if it does (e.g. parallel unlock consumed the stock), we can't rollback DB.
+                    // Throw to trigger retry or dead letter.
+                    throw new IllegalArgumentException(
+                            "Confirm failed: insufficient locked stock for product: " + productCode +
+                            " after DB commit. OrderId: " + orderId);
+                }
+
+                redisSuccessfully.add(stockRequest);
+            }
+
+        } catch (jakarta.persistence.OptimisticLockException e) {
+            // entityManager.flush() throws Jakarta Persistence OptimisticLockException,
+            // NOT Spring's wrapper. Convert to Spring's OptimisticLockingFailureException
+            // so that InventoryIdempotencyExecutor can recognize and retry it.
+            throw new org.springframework.dao.OptimisticLockingFailureException("Optimistic lock conflict at flush time", e);
         } catch (Exception e) {
-            // 回滚已成功的 Redis 操作：locked++
-            for (StockRequest req : confirmedSuccessfully) {
+            // If some items already had Redis decremented, roll them back.
+            for (StockRequest req : redisSuccessfully) {
                 try {
                     stringRedisTemplate.opsForValue().increment(
                             RedisKeys.lockedStockKey(req.getProductCode()), req.getQuantity());
                 } catch (Exception ignored) {
-                    // 回滚失败不应掩盖原始异常
                 }
             }
             // DB 由 @Transactional 自动回滚
             throw e;
         }
     }
+
     @Override
     @Transactional
     public void batchUnlockStock(Long orderId, List<StockRequest> stockRequestList){
