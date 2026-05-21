@@ -43,17 +43,29 @@ public class InventoryOperationServiceImpl implements InventoryOperationService 
                 .orElseThrow(()-> new IllegalArgumentException("Operation not found"));
         inventoryOperation.markSuccess();
         // must save now
-        inventoryOperationRepository.saveAndFlush(inventoryOperation);
+        // inventoryOperationRepository.saveAndFlush(inventoryOperation);
     }
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markFailed(Long orderId, OperationType operationType){
+    public void markFinalFailed(Long orderId, OperationType operationType){
         InventoryOperation inventoryOperation = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId,operationType)
                 .orElseThrow(()-> new IllegalArgumentException("Operation not found"));
-        inventoryOperation.markFailed();
+        inventoryOperation.markFinalFailed();
         // must save now
-        inventoryOperationRepository.saveAndFlush(inventoryOperation);
+        // inventoryOperationRepository.saveAndFlush(inventoryOperation);
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markRetryableFailed(Long orderId, OperationType operationType){
+        InventoryOperation inventoryOperation = inventoryOperationRepository
+                .findByOrderIdAndOperationType(orderId,operationType)
+                .orElseThrow(()-> new IllegalArgumentException("Operation not found"));
+        inventoryOperation.markRetryableFailed();
+        // must save now
+        // inventoryOperationRepository.saveAndFlush(inventoryOperation);
+    }
+
+
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)

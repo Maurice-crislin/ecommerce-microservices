@@ -6,7 +6,8 @@ import org.example.inventoryservice.domain.OperationType;
 public interface InventoryOperationService {
     InventoryOperation getOrStartOperation(Long orderId, OperationType operationType);
     void markSuccess(Long orderId, OperationType operationType);
-    void markFailed(Long orderId, OperationType operationType);
+    void markFinalFailed(Long orderId, OperationType operationType);
+    void markRetryableFailed(Long orderId, OperationType operationType);
     void deleteOperation(Long orderId, OperationType operationType);
     InventoryOperation getOperationByOrderIdAndOperationType(Long orderId, OperationType operationType);
 }

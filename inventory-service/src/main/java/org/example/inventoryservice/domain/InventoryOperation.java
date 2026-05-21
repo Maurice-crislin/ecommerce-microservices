@@ -50,8 +50,12 @@ public class InventoryOperation {
         this.operationStatus = OperationStatus.SUCCESS;
         this.updatedAt = LocalDateTime.now();
     }
-    public void markFailed (){
-        this.operationStatus = OperationStatus.FAILED;
+    public void markFinalFailed (){
+        this.operationStatus = OperationStatus.FAILED_FINAL;
+        this.updatedAt = LocalDateTime.now();
+    }
+    public void markRetryableFailed (){
+        this.operationStatus = OperationStatus.FAILED_RETRYABLE;
         this.updatedAt = LocalDateTime.now();
     }
 }

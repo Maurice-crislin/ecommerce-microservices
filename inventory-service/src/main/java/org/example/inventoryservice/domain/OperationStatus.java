@@ -8,5 +8,6 @@ import lombok.Setter;
 public enum OperationStatus {
     PROCESSING,
     SUCCESS,
-    FAILED,
+    FAILED_RETRYABLE,
+    FAILED_FINAL,
 }
