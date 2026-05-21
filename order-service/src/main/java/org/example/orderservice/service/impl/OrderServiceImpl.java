@@ -1,6 +1,7 @@
 package org.example.orderservice.service.impl;
 
 
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
@@ -43,6 +44,7 @@ public class OrderServiceImpl implements OrderService {
     private final OrderMessageProducer orderMessageProducer;
 
     @Override
+    @Transactional
     public void createOrder(OrderRequest request){
 
         List<org.common.inventory.dto.StockRequest> stockRequestList  = request.getProductRequests();
