@@ -35,9 +35,9 @@ import org.junit.jupiter.api.Order;
  *  executor 的 OptimisticLockingFailureException catch 分支。
  *
  *  验证目标:
- *    T1: batchLogic 抛 OptimisticLock → executor deleteOperation + 删 Redis key
- *    T2: 其他异常(IllegalArgument) → markFailed (形成对比)
- *    T3: 连续5次抛 OptimisticLock → deleteOperation → 第6次手动重试成功
+ *    T1: batchLogic 抛 OptimisticLock → FAILED_RETRYABLE (不再删除)
+ *    T2: 其他异常(IllegalArgument) → FAILED_FINAL (形成对比)
+ *    T3: 连续5次抛 OptimisticLock → 重试耗尽后 FAILED_RETRYABLE → 第6次手动重试成功
  *    T4: 幂等并发控制 → 5线程同 orderId → 仅1次业务
  * =====================================================================
  *
@@ -80,13 +80,14 @@ public class InventoryOptimisticLockDeterministicTest {
     }
 
     // ==================================================================
-    //  T1: batchLogic 抛 OptimisticLock → executor delete + 删 Redis
+    //  T1: batchLogic 抛 OptimisticLock
     //  注意：不手动设置 Redis key，让 executor 正常走到 batchLogic
+    //  现在 executor 不再删除幂等记录，改为标记 FAILED_RETRYABLE
     // ==================================================================
     @Test
-    @DisplayName("T1: batchLogic抛OptimisticLock→deleteOp+删Redis(非FAILED)")
+    @DisplayName("T1: batchLogic抛OptimisticLock→FAILED_RETRYABLE")
     @SneakyThrows
-    void catchOptimisticLock_deletesRecord() {
+    void catchOptimisticLock_markedRetryableFailed() {
         long orderId = 100L;
 
         try {
@@ -96,18 +97,21 @@ public class InventoryOptimisticLockDeterministicTest {
         } catch (OptimisticLockingFailureException expected) {
         }
 
-        // ✅ 幂等记录被删除(不是 FAILED)
+        // ✅ 幂等记录存在且为 FAILED_RETRYABLE (不再删除)
         Optional<InventoryOperation> op = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.LOCK);
         assertThat(op)
-                .as("T1: 幂等记录被deleteOperation()删除(非 markFailed)")
-                .isEmpty();
+                .as("T1: 幂等记录应存在(非delete)")
+                .isPresent();
+        assertThat(op.get().getOperationStatus())
+                .as("T1: 幂等记录应为FAILED_RETRYABLE")
+                .isEqualTo(OperationStatus.FAILED_RETRYABLE);
 
-        // ✅ Redis key 被删除
+        // ✅ Redis key 应为 FAILED_RETRYABLE
         String redisKey = InventoryIdempotencyExecutor.IDEM_PREFIX + orderId + ":" + OperationType.LOCK;
         assertThat(stringRedisTemplate.opsForValue().get(redisKey))
-                .as("T1: Redis key 被删除")
-                .isNull();
+                .as("T1: Redis 应为 FAILED_RETRYABLE")
+                .isEqualTo(OperationStatus.FAILED_RETRYABLE.name());
 
         // ✅ 库存不受影响
         Inventory inv = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
@@ -138,13 +142,13 @@ public class InventoryOptimisticLockDeterministicTest {
                 .as("T2: 幂等记录应存在(非delete)")
                 .isPresent();
         assertThat(op.get().getOperationStatus())
-                .as("T2: 幂等记录为FAILED")
-                .isEqualTo(OperationStatus.FAILED);
+                .as("T2: 幂等记录为FAILED_FINAL")
+                .isEqualTo(OperationStatus.FAILED_FINAL);
 
         String redisKey = InventoryIdempotencyExecutor.IDEM_PREFIX + orderId + ":" + OperationType.LOCK;
         assertThat(stringRedisTemplate.opsForValue().get(redisKey))
-                .as("T2: Redis 为 FAILED")
-                .isEqualTo(OperationStatus.FAILED.name());
+                .as("T2: Redis 为 FAILED_FINAL")
+                .isEqualTo(OperationStatus.FAILED_FINAL.name());
     }
 
     // ==================================================================

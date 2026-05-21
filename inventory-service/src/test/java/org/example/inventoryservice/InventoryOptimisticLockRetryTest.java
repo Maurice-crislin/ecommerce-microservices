@@ -361,11 +361,11 @@ public class InventoryOptimisticLockRetryTest {
         Optional<InventoryOperation> operation = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.LOCK);
         assertThat(operation).isPresent();
-        assertThat(operation.get().getOperationStatus()).isEqualTo(OperationStatus.FAILED);
+        assertThat(operation.get().getOperationStatus()).isEqualTo(OperationStatus.FAILED_FINAL);
 
         String redisKey = InventoryIdempotencyExecutor.IDEM_PREFIX + orderId + ":" + OperationType.LOCK;
         assertThat(stringRedisTemplate.opsForValue().get(redisKey))
-                .isEqualTo(OperationStatus.FAILED.name());
+                .isEqualTo(OperationStatus.FAILED_FINAL.name());
 
         Inventory inventory = inventoryRepository.findInventoryByProductCode(PRODUCT_CODE)
                 .orElseThrow(() -> new AssertionError("商品应存在"));
@@ -417,7 +417,7 @@ public class InventoryOptimisticLockRetryTest {
 
         assertThat(inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.LOCK).get().getOperationStatus())
-                .isEqualTo(OperationStatus.FAILED);
+                .isEqualTo(OperationStatus.FAILED_FINAL);
 
         InventoryBatchRequest retryEvent = new InventoryBatchRequest(orderId,
                 List.of(new StockRequest(PRODUCT_CODE, 1)));

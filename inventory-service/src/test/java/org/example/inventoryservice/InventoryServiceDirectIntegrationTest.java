@@ -164,10 +164,8 @@ public class InventoryServiceDirectIntegrationTest {
     //  场景 2 — CONFIRM 乐观锁冲突 → Retry重试 → 最终成功
     //  两个不同 orderId CONFIRM 同一商品 → @Version 冲突
     //
-    //  项目已修复：batchConfirmSale() 通过 TransactionSynchronizationManager.afterCommit()
-    //  将 Redis 操作推迟到 DB commit 成功之后执行。如果 commit 阶段抛出
-    //  OptimisticLockFailureException，afterCommit() 不会被调用，Redis 不受影响，
-    //  重试时 locked 仍然正确。
+    //  项目已修复：batchConfirmSale() 通过 entityManager.flush()
+    //  提前将 DB 变更 flush 到数据库，乐观锁冲突在方法体内（Redis 操作之前）爆发。
     // ======================================================================
     @Test
     @DisplayName("场景2: CONFIRM乐观锁冲突→Retry→最终成功")
@@ -228,7 +226,7 @@ public class InventoryServiceDirectIntegrationTest {
     //  场景 3 — UNLOCK 非法参数 → 不重试,快速失败
     // ======================================================================
     @Test
-    @DisplayName("场景3: UNLOCK业务异常(参数错)→不重试,快速失败+FAILED记录")
+    @DisplayName("场景3: UNLOCK业务异常(参数错)→不重试,快速失败+FAILED_FINAL记录")
     void testUnlock_illegalArgument_noRetry_failed() {
         long productCode = 2003L;
         Inventory inventory = new Inventory(productCode, 5);
@@ -249,11 +247,11 @@ public class InventoryServiceDirectIntegrationTest {
         assertEquals("2", stringRedisTemplate.opsForValue()
                 .get(RedisKeys.lockedStockKey(productCode)), "Redis locked=2");
 
-        // 幂等记录标记为 FAILED
+        // 幂等记录标记为 FAILED_FINAL
         Optional<InventoryOperation> op = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.UNLOCK);
         assertTrue(op.isPresent(), "幂等记录应存在");
-        assertEquals(OperationStatus.FAILED, op.get().getOperationStatus(), "状态应为FAILED");
+        assertEquals(OperationStatus.FAILED_FINAL, op.get().getOperationStatus(), "状态应为FAILED_FINAL");
     }
 
     // ======================================================================
@@ -375,11 +373,11 @@ public class InventoryServiceDirectIntegrationTest {
 
     // ======================================================================
     //  场景 7 — CONFIRM: 因库存不足而快速失败
-    //  CONFIRM 时 Redis locked 不足 → 业务异常 → PROCESSING→FAILED
+    //  CONFIRM 时 Redis locked 不足 → 业务异常 → PROCESSING→FAILED_FINAL
     //  注意: RuntimeException 子类默认不会被 @Retryable 重试
     // ======================================================================
     @Test
-    @DisplayName("场景7: CONFIRM库存不足→快速失败+FAILED记录")
+    @DisplayName("场景7: CONFIRM库存不足→快速失败+FAILED_FINAL记录")
     void testConfirm_insufficientLocked_failed() {
         long productCode = 5001L;
         inventoryRepository.saveAndFlush(new Inventory(productCode, 10));
@@ -399,11 +397,11 @@ public class InventoryServiceDirectIntegrationTest {
         assertEquals("1", stringRedisTemplate.opsForValue()
                 .get(RedisKeys.lockedStockKey(productCode)));
 
-        // 幂等记录标记为 FAILED
+        // 幂等记录标记为 FAILED_FINAL
         Optional<InventoryOperation> op = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.CONFIRM);
         assertTrue(op.isPresent());
-        assertEquals(OperationStatus.FAILED, op.get().getOperationStatus(), "应为FAILED");
+        assertEquals(OperationStatus.FAILED_FINAL, op.get().getOperationStatus(), "应为FAILED_FINAL");
     }
 
     // ======================================================================
@@ -499,11 +497,11 @@ public class InventoryServiceDirectIntegrationTest {
     }
 
     // ======================================================================
-    //  场景 10 — UNLOCK: Redis locked key 不存在时 → Lua 脚本返回 0 → FAILED
+    //  场景 10 — UNLOCK: Redis locked key 不存在时 → Lua 脚本返回 0 → FAILED_FINAL
     //  验证极端情况下的容错
     // ======================================================================
     @Test
-    @DisplayName("场景10: UNLOCK时Redis locked不存在→FAILED")
+    @DisplayName("场景10: UNLOCK时Redis locked不存在→FAILED_FINAL")
     void testUnlock_noRedisKey_failed() {
         long productCode = 9001L;
         inventoryRepository.saveAndFlush(new Inventory(productCode, 10));
@@ -515,11 +513,11 @@ public class InventoryServiceDirectIntegrationTest {
                     buildBatchRequest(orderId, productCode, 1));
         });
 
-        // 幂等记录标记为 FAILED
+        // 幂等记录标记为 FAILED_FINAL
         Optional<InventoryOperation> op = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.UNLOCK);
         assertTrue(op.isPresent());
-        assertEquals(OperationStatus.FAILED, op.get().getOperationStatus(), "应为FAILED");
+        assertEquals(OperationStatus.FAILED_FINAL, op.get().getOperationStatus(), "应为FAILED_FINAL");
     }
 
     // ======================================================================
@@ -558,7 +556,7 @@ public class InventoryServiceDirectIntegrationTest {
     //  验证 batchConfirmSale 中商品A成功但商品B失败时整体事务回滚
     // ======================================================================
     @Test
-    @DisplayName("场景12: CONFIRM多商品部分失败→整体回滚→FAILED")
+    @DisplayName("场景12: CONFIRM多商品部分失败→整体回滚→FAILED_FINAL")
     void testConfirm_batchPartialRollback_failed() {
         long productCodeA = 11001L;
         long productCodeB = 11002L;
@@ -591,11 +589,11 @@ public class InventoryServiceDirectIntegrationTest {
         assertEquals("5", stringRedisTemplate.opsForValue()
                 .get(RedisKeys.lockedStockKey(productCodeA)), "商品Alocked回滚");
 
-        // 幂等记录标记为 FAILED
+        // 幂等记录标记为 FAILED_FINAL
         Optional<InventoryOperation> op = inventoryOperationRepository
                 .findByOrderIdAndOperationType(orderId, OperationType.CONFIRM);
         assertTrue(op.isPresent());
-        assertEquals(OperationStatus.FAILED, op.get().getOperationStatus());
+        assertEquals(OperationStatus.FAILED_FINAL, op.get().getOperationStatus());
     }
 
     // ====================== Helpers ======================
