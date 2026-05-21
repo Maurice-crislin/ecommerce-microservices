@@ -68,43 +68,18 @@ public class InventoryIdempotencyExecutor {
             } catch (OptimisticLockingFailureException e) {
                 // 【乐观锁冲突】: 当前线程的业务遇到版本冲突
                 // executeOnce 已将 DB 记录标记为 FAILED_RETRYABLE，Redis 设为 FAILED_RETRYABLE。
-                if (attempt < MAX_RETRIES) {
-                    log.warn("OptimisticLockFailure (attempt {}/{}), 等待 {}ms 后重试, orderId={}, type={}",
-                            attempt, MAX_RETRIES, delay, orderId, operationType);
-                    try {
-                        Thread.sleep(delay);
-                        delay *= RETRY_DELAY_MULTIPLIER;
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("Retry interrupted", ie);
-                    }
-                } else {
-                    log.error("OptimisticLockFailure 重试耗尽 (attempts={}), 发送到死信队列 orderId={}, type={}",
-                            MAX_RETRIES, orderId, operationType);
-                    throw e;
-                }
+                handleRetryOrThrow(attempt, delay, e, orderId, operationType);
+                delay *= RETRY_DELAY_MULTIPLIER;
             } catch (OperationProcessingException e) {
                 // 【其他线程处理中】: 另一个线程已经获取了执行权
                 // 不能删除 Redis key 或 DB 记录！否则会破坏赢家线程的执行
                 // 只等待后重试，希望赢家线程已完成
-                if (attempt < MAX_RETRIES) {
-                    log.warn("OperationProcessing (attempt {}/{}), 等待 {}ms 后重试, orderId={}, type={}",
-                            attempt, MAX_RETRIES, delay, orderId, operationType);
-                    try {
-                        Thread.sleep(delay);
-                        delay *= RETRY_DELAY_MULTIPLIER;
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new RuntimeException("Retry interrupted", ie);
-                    }
-                } else {
-                    log.error("OperationProcessing 重试耗尽 (attempts={}), 发送到死信队列 orderId={}, type={}",
-                            MAX_RETRIES, orderId, operationType);
-                    throw e;
-                }
+                handleRetryOrThrow(attempt, delay, e, orderId, operationType);
+                delay *= RETRY_DELAY_MULTIPLIER;
             }
         }
     }
+    
 
     /**
      * 单次尝试执行幂等操作。
@@ -188,6 +163,39 @@ public class InventoryIdempotencyExecutor {
             } catch (Exception ignored) {
                 // markFailed 本身的异常不应掩盖原始异常
             }
+            throw e;
+        }
+    }
+
+    /**
+     * 处理重试逻辑：如果还有重试次数则等待后返回，否则抛出原始异常。
+     * <p>
+     * 该方法提取了两个 catch 块中重复的 retry 逻辑：
+     * <ul>
+     *   <li>重试次数内：日志警告、线程睡眠等待</li>
+     *   <li>重试耗尽：日志错误、抛出原始异常</li>
+     * </ul>
+     *
+     * @param attempt       当前尝试次数（从 1 开始）
+     * @param delay         当前等待延迟（ms）
+     * @param e             原始异常
+     * @param orderId       订单 ID
+     * @param operationType 操作类型
+     */
+    private void handleRetryOrThrow(int attempt, long delay, RuntimeException e,
+                                    Long orderId, OperationType operationType) {
+        if (attempt < MAX_RETRIES) {
+            log.warn("{} (attempt {}/{}), 等待 {}ms 后重试, orderId={}, type={}",
+                    e.getClass().getSimpleName(), attempt, MAX_RETRIES, delay, orderId, operationType);
+            try {
+                Thread.sleep(delay);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Retry interrupted", ie);
+            }
+        } else {
+            log.error("{} 重试耗尽 (attempts={}), 发送到死信队列 orderId={}, type={}",
+                    e.getClass().getSimpleName(), MAX_RETRIES, orderId, operationType);
             throw e;
         }
     }
