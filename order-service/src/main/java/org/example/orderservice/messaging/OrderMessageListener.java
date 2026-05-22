@@ -25,7 +25,7 @@ public class OrderMessageListener {
     @Transactional
     public void handleOrderTimeOut(Long orderId){
         Order order = orderRepository.findOrderByOrderId(orderId).orElseThrow(()-> new IllegalArgumentException("orderId not found"));
-        if (order.getOrderStatus() == OrderStatus.PROCESSING){
+        if (order.getOrderStatus() == OrderStatus.AWAITING_PAYMENT){
             // update order status to “Timeout”
             order.timeout();
 
