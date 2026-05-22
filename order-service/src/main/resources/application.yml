@@ -5,3 +5,9 @@ services:
     base-url: http://inventory-service:8080
   payment:
     base-url: http://payment-service:8080
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
