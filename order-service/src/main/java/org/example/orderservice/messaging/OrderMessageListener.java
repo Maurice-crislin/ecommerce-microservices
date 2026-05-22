@@ -10,6 +10,9 @@ import org.example.orderservice.entity.OrderItem;
 import org.common.order.enums.OrderStatus;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 
@@ -19,10 +22,12 @@ public class OrderMessageListener {
     private final OrderRepository orderRepository;
     private final InventoryEventProducer inventoryEventProducer;
     @RabbitListener(queues = RabbitMQConfig.ORDER_RELEASE_QUEUE)
+    @Transactional
     public void handleOrderTimeOut(Long orderId){
         Order order = orderRepository.findOrderByOrderId(orderId).orElseThrow(()-> new IllegalArgumentException("orderId not found"));
         if (order.getOrderStatus() == OrderStatus.PROCESSING){
-
+            // update order status to “Timeout”
+            order.timeout();
 
             List<OrderItem> orderItems = order.getOrderItems();
             List<StockRequest>  stockRequests = orderItems
@@ -30,10 +35,15 @@ public class OrderMessageListener {
                     .map((item)-> new StockRequest(item.getProductCode(), item.getQuantity()))
                     .toList();
 
-            inventoryEventProducer.sendBatchUnlockStockEvent(new InventoryBatchRequest(orderId,stockRequests));
-            // update order status to “Timeout”
-            order.timeout();
-            orderRepository.save(order);
+
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            inventoryEventProducer.sendBatchUnlockStockEvent(new InventoryBatchRequest(orderId,stockRequests));
+                        }
+                    }
+            );
         }
     }
 }

@@ -12,6 +12,9 @@ import org.example.orderservice.entity.Order;
 import org.example.orderservice.entity.OrderItem;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +26,9 @@ public class PaymentStatusListener {
     private final OrderRepository orderRepository;
     private final  InventoryEventProducer  inventoryEventProducer;
     private final PaymentClient paymentClient;
+
     @RabbitListener(queues = RabbitMQConfig.PAYMENT_SUCCESS_STATUS_QUEUE)
+    @Transactional
     public void handlePaymentSuccess(PaymentStatusMessage message) {
 
         Long orderId = message.getOrderId();
@@ -36,7 +41,6 @@ public class PaymentStatusListener {
             return;
         }
         order.pay();
-        orderRepository.save(order);
 
         // batch notice confirm sale
         List<OrderItem> orderItems = order.getOrderItems();
@@ -44,17 +48,23 @@ public class PaymentStatusListener {
                 .stream()
                 .map((item)-> new StockRequest(item.getProductCode(), item.getQuantity()))
                 .toList();
-        inventoryEventProducer.sendBatchConfirmStockEvent(new InventoryBatchRequest(orderId,stockRequests));
-
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        inventoryEventProducer.sendBatchConfirmStockEvent(new InventoryBatchRequest(orderId,stockRequests));
+                    }
+                }
+        );
     }
 
     @RabbitListener(queues = RabbitMQConfig.PAYMENT_FAILED_STATUS_QUEUE)
+    @Transactional
     public void handlePaymentFailed(PaymentStatusMessage message) {
         Long orderId = message.getOrderId();
         Order order = orderRepository.findById(orderId).orElseThrow(()->new IllegalArgumentException("Order id not found"));
 
         order.fail();
-        orderRepository.save(order);
 
         // batch notice unlock inventory
         List<OrderItem> orderItems = order.getOrderItems();
@@ -63,7 +73,14 @@ public class PaymentStatusListener {
                 .map((item)-> new StockRequest(item.getProductCode(), item.getQuantity()))
                 .toList();
 
-        inventoryEventProducer.sendBatchUnlockStockEvent(new InventoryBatchRequest(orderId,stockRequests));
+        TransactionSynchronizationManager.registerSynchronization(
+                new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        inventoryEventProducer.sendBatchUnlockStockEvent(new InventoryBatchRequest(orderId,stockRequests));
+                    }
+                }
+        );
     }
 
 }
