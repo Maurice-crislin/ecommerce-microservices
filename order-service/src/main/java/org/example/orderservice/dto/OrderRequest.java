@@ -10,5 +10,6 @@ import java.util.List;
 @Data
 public class OrderRequest {
     private String userId;
+    private String idempotencyKey;
     private List<StockRequest> productRequests; // { productCode:quantity }
 }
