@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findOrderByOrderId(Long orderId);
+
+    Boolean existsByIdempotencyKey(String idempotencyKey);
 }

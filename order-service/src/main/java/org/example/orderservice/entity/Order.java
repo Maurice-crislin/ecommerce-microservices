@@ -13,7 +13,9 @@ import java.util.List;
 @Getter
 @Setter
 @NoArgsConstructor
-@Table(name="orders")
+@Table(name="orders",uniqueConstraints = {
+        @UniqueConstraint(columnNames = {"idempotency_key"})
+})
 public class Order {
     @Id
     private Long orderId;
@@ -27,6 +29,9 @@ public class Order {
     private LocalDateTime createdAt;
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+    @NotNull
+    @Column(name = "idempotency_key")
+    private String idempotencyKey;
 
     @Version
     private Long version;

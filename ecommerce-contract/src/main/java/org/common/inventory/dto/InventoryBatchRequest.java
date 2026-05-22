@@ -11,6 +11,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class InventoryBatchRequest {
+    @NotEmpty
     private Long orderId;
     @NotEmpty(message = "Stock request list cannot be empty")
     private List<StockRequest> stockRequestList; // StockRequest { productCode, quantity }
