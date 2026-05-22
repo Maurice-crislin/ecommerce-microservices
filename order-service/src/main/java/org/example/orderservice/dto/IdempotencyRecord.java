@@ -9,6 +9,6 @@ import org.common.order.enums.OrderIdeStatus;
 @Setter
 @AllArgsConstructor
 public class IdempotencyRecord {
-    private OrderIdeStatus status;
     private Long orderId;
+    private OrderIdeStatus status;
 }
