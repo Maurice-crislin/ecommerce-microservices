@@ -9,6 +9,7 @@ package org.common.order.enums;
  * */
 public enum OrderStatus {
     PROCESSING,
+    AWAITING_PAYMENT,
     PAID,
     FAILED,
     CANCELED,

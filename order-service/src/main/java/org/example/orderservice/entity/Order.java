@@ -62,34 +62,34 @@ public class Order {
     }
 
     public void pay() {
-        if (this.orderStatus != OrderStatus.PROCESSING) {
+        if (this.orderStatus != OrderStatus.AWAITING_PAYMENT) {
             throw new IllegalStateException(
-                    "Only PROCESSING orders can be paid"
+                    "Only AWAITING_PAYMENT orders can be paid"
             );
         }
 
         this.orderStatus = OrderStatus.PAID;
     }
     public void cancel(){
-        if(this.orderStatus != OrderStatus.PROCESSING){
+        if(this.orderStatus != OrderStatus.AWAITING_PAYMENT){
             throw new IllegalStateException(
-                    "Only PROCESSING orders can be cancelled"
+                    "Only AWAITING_PAYMENT orders can be cancelled"
             );
         }
         this.orderStatus = OrderStatus.CANCELED;
     }
     public void timeout(){
-        if(this.orderStatus != OrderStatus.PROCESSING){
+        if(this.orderStatus != OrderStatus.AWAITING_PAYMENT){
             throw new IllegalStateException(
-                    "Only PROCESSING orders can be timeout"
+                    "Only AWAITING_PAYMENT orders can be timeout"
             );
         }
         this.orderStatus = OrderStatus.TIMEOUT;
     }
     public void fail(){
-        if(this.orderStatus != OrderStatus.PROCESSING){
+        if(this.orderStatus != OrderStatus.AWAITING_PAYMENT){
             throw new IllegalStateException(
-                    "Only PROCESSING orders can be failed"
+                    "Only AWAITING_PAYMENT orders can be failed"
             );
         }
         this.orderStatus = OrderStatus.FAILED;
