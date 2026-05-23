@@ -26,7 +26,7 @@ public class Payment {
     private BigDecimal amount;
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
-    private PaymentStatus status;
+    private PaymentStatus status = PaymentStatus.PENDING;
     private String provider;
     @Column(name = "provider_tx_id")
     private String providerTxId;
