@@ -1,7 +1,7 @@
 package org.common.payment.enums;
 
 public enum PaymentStatus {
-    PROCESSING,
+    PENDING,
     PAID,
     FAILED,
 }
