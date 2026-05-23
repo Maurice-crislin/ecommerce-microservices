@@ -1,16 +1,11 @@
 package org.example.paymentservice;
 
 import org.example.paymentservice.controller.PaymentController;
-
 import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.dto.PaymentResponse;
-import org.example.paymentservice.messaging.RabbitMQConfig;
-
 import org.example.paymentservice.repository.PaymentRepository;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.ResponseEntity;
@@ -34,17 +29,12 @@ class PaymentConcurrencyTest {
     @Autowired
     private PaymentRepository paymentRepository;
 
-    @Autowired
-    private RabbitTemplate rabbitTemplate;
-
     private static final int THREAD_COUNT = 10;
 
     @BeforeEach
     void clean() {
         paymentRepository.deleteAll();
         paymentRepository.flush();
-        while (rabbitTemplate.receive(RabbitMQConfig.PAYMENT_FAILED_STATUS_QUEUE) != null) {}
-        while (rabbitTemplate.receive(RabbitMQConfig.PAYMENT_SUCCESS_STATUS_QUEUE) != null) {}
     }
 
     @Test
@@ -81,7 +71,7 @@ class PaymentConcurrencyTest {
             paymentNos.add(resp.getBody().getPaymentNo());
         }
 
-        // ✅ 所有请求返回的是同一个 paymentNo
+        // ✅ 所有请求返回的是同一个 paymentNo（幂等）
         assertEquals(1, paymentNos.size());
 
         // ✅ DB 里只有一条 payment
@@ -96,4 +86,3 @@ class PaymentConcurrencyTest {
         f.set(target, value);
     }
 }
-

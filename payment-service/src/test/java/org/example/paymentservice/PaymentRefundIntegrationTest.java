@@ -2,7 +2,6 @@ package org.example.paymentservice;
 
 import org.common.payment.dto.RefundResponse;
 import org.common.payment.enums.PaymentStatus;
-import org.common.payment.message.PaymentStatusMessage;
 import org.common.payment.message.RefundStatusMessage;
 import org.example.paymentservice.controller.PaymentController;
 import org.example.paymentservice.dto.PaymentRequest;
@@ -42,12 +41,10 @@ public class PaymentRefundIntegrationTest {
 
     private RabbitTemplate testRabbitTemplate;
 
-    private final String PAYMENT_STATUS_QUEUE = "payment_status_queue";
     private final String REFUND_STATUS_QUEUE = "refund_status_queue";
 
     @BeforeEach
     public void setup() {
-
         testRabbitTemplate = new RabbitTemplate(rabbitTemplate.getConnectionFactory());
         Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
         DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
@@ -55,8 +52,7 @@ public class PaymentRefundIntegrationTest {
         converter.setJavaTypeMapper(typeMapper);
         testRabbitTemplate.setMessageConverter(converter);
 
-        // clear queues
-        while (testRabbitTemplate.receive(PAYMENT_STATUS_QUEUE) != null) {}
+        // clear refund queue only (payment is now synchronous, no MQ)
         while (testRabbitTemplate.receive(REFUND_STATUS_QUEUE) != null) {}
     }
 
@@ -64,14 +60,13 @@ public class PaymentRefundIntegrationTest {
     public void cleanup() {
         refundRepository.deleteAll();
         paymentRepository.deleteAll();
-
-        refundRepository.flush(); // 强制同步到数据库
+        refundRepository.flush();
         paymentRepository.flush();
     }
 
-    // =================== Payment 测试 ===================
+    // =================== Payment 测试 (同步模式) ===================
     @Test
-    public void testPaymentFlow() throws InterruptedException {
+    public void testPaymentFlow() {
         PaymentRequest request = new PaymentRequest();
         setPaymentRequest(request, 1001L, "user1", new BigDecimal("50.0"));
 
@@ -80,19 +75,14 @@ public class PaymentRefundIntegrationTest {
         PaymentResponse body = response.getBody();
         assertNotNull(body);
         assertNotNull(body.getPaymentNo());
-        assertEquals(PaymentStatus.PROCESSING, body.getStatus());
+
+        // Payment Service 现在同步返回最终结果（PAID 或 FAILED）
+        assertTrue(body.getStatus() == PaymentStatus.PAID || body.getStatus() == PaymentStatus.FAILED);
 
         // 验证数据库
         Payment payment = paymentRepository.findPaymentByPaymentNo(body.getPaymentNo()).orElseThrow();
         assertEquals(request.getOrderId(), payment.getOrderId());
-        assertTrue(payment.getStatus() == PaymentStatus.PAID || payment.getStatus() == PaymentStatus.FAILED);
-
-
-        // 验证 MQ 消息
-        PaymentStatusMessage statusMessage = receivePaymentMessage(body.getPaymentNo(), 5000);
-        assertNotNull(statusMessage);
-        assertEquals(payment.getPaymentNo(), statusMessage.getPaymentNo());
-        assertEquals(payment.getStatus(), statusMessage.getStatus());
+        assertEquals(body.getStatus(), payment.getStatus());
     }
 
     // =================== Refund 测试 ===================
@@ -119,7 +109,6 @@ public class PaymentRefundIntegrationTest {
         Refund refund = refundRepository.findByRefundNo(refundResponse.getRefundNo()).orElseThrow();
         System.out.println("refund.getStatus() " + refund.getStatus());
         assertEquals(payment.getPaymentNo(), refund.getPaymentNo());
-        // assertEquals(refund.getStatus(), RefundStatus.PROCESSING);
 
         // 4️⃣ 等待异步处理 + MQ 消息
         RefundStatusMessage refundMessage = receiveRefundMessage(refund.getRefundNo(), 5000);
@@ -128,7 +117,6 @@ public class PaymentRefundIntegrationTest {
         assertEquals(refund.getPaymentNo(), refundMessage.getPaymentNo());
         System.out.println("refundMessage.getStatus() " + refundMessage.getStatus());
         assertTrue(refundMessage.getStatus() == RefundStatus.SUCCESS || refundMessage.getStatus() == RefundStatus.FAILED);
-        // mq status is same as database
         assertEquals(refundMessage.getStatus(), refund.getStatus());
 
         // 5️⃣ 数据库状态已更新
@@ -153,19 +141,6 @@ public class PaymentRefundIntegrationTest {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private PaymentStatusMessage receivePaymentMessage(String paymentNo, long timeoutMs) throws InterruptedException {
-        long start = System.currentTimeMillis();
-        while (System.currentTimeMillis() - start < timeoutMs) {
-            Object msg = testRabbitTemplate.receiveAndConvert(PAYMENT_STATUS_QUEUE);
-            if (msg instanceof PaymentStatusMessage) {
-                PaymentStatusMessage message = (PaymentStatusMessage) msg;
-                if (message.getPaymentNo().equals(paymentNo)) return message;
-            }
-            Thread.sleep(50);
-        }
-        return null;
     }
 
     private RefundStatusMessage receiveRefundMessage(String refundNo, long timeoutMs) throws InterruptedException {
