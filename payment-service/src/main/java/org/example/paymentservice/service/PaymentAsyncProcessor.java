@@ -1,6 +1,8 @@
 package org.example.paymentservice.service;
 
 
+import org.example.paymentservice.model.Payment;
+
 public interface PaymentAsyncProcessor {
-    void processPaymentAsync(String paymentNo);
+    Payment processPaymentAsync(Payment payment);
 }

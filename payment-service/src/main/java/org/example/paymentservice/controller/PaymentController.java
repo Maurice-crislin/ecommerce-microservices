@@ -7,6 +7,7 @@ import org.example.paymentservice.dto.PaymentRequest;
 import org.example.paymentservice.dto.PaymentResponse;
 import org.common.payment.enums.PaymentStatus;
 
+import org.example.paymentservice.model.Payment;
 import org.example.paymentservice.service.PaymentService;
 import org.example.paymentservice.service.RefundService;
 import org.springframework.http.ResponseEntity;
@@ -20,10 +21,15 @@ public class PaymentController {
     private final RefundService refundService;
     @PostMapping
     public ResponseEntity<PaymentResponse> payment(@RequestBody @Valid PaymentRequest request){
-        String paymentNo = paymentService.createPayment(request);
-        return ResponseEntity.accepted().body(
-                new PaymentResponse(paymentNo, PaymentStatus.PROCESSING,"Payment request accepted")
-        );
+        // 同步返回最终状态的 Payment
+        Payment payment = paymentService.createPayment(request);
+        // 根据最终状态决定 HTTP 状态码和响应消息
+        if (payment.getStatus() == PaymentStatus.PAID) {
+            return ResponseEntity.ok(new PaymentResponse(payment.getPaymentNo(), PaymentStatus.PAID, "Payment successful"));
+        } else {
+            // 支付失败，标记为失败
+            return ResponseEntity.badRequest().body(new PaymentResponse(payment.getPaymentNo(), PaymentStatus.FAILED, "Payment failed"));
+        }
     }
     // GET /payment/refund/{paymentNo}
     @GetMapping("/refund/{paymentNo}")
