@@ -24,7 +24,7 @@ public class Order {
     @NotNull
     private BigDecimal totalAmount;
     @Enumerated(EnumType.STRING)
-    private OrderStatus orderStatus;
+    private OrderStatus orderStatus = OrderStatus.PROCESSING;
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
     @Column(name = "updated_at")
@@ -57,18 +57,42 @@ public class Order {
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL)
     private List<OrderItem> orderItems;
 
-    public void initState() {
-        this.orderStatus = OrderStatus.PROCESSING;
-    }
 
-    public void pay() {
+    /**
+     * PROCESSING
+     *     -> AWAITING_PAYMENT ->PAYING
+     *                                 ├──> PAID
+     *                                 ├──> FAILED
+     *     -> AWAITING_PAYMENT
+     *     ├──> TIMEOUT
+     *     └──> CANCELED
+     * */
+
+    // 锁定在支付中状态,不得超时或者取消
+    public void lockPaying(){
         if (this.orderStatus != OrderStatus.AWAITING_PAYMENT) {
             throw new IllegalStateException(
-                    "Only AWAITING_PAYMENT orders can be paid"
+                    "Only AWAITING_PAYMENT orders can be lock"
+            );
+        }
+        this.orderStatus = OrderStatus.PAYING;
+    }
+    public void pay() {
+        if (this.orderStatus != OrderStatus.PAYING) {
+            throw new IllegalStateException(
+                    "Only PAYING orders can be paid"
             );
         }
 
         this.orderStatus = OrderStatus.PAID;
+    }
+    public void fail(){
+        if(this.orderStatus != OrderStatus.PAYING){
+            throw new IllegalStateException(
+                    "Only Paying orders can be failed"
+            );
+        }
+        this.orderStatus = OrderStatus.FAILED;
     }
     public void cancel(){
         if(this.orderStatus != OrderStatus.AWAITING_PAYMENT){
@@ -85,13 +109,5 @@ public class Order {
             );
         }
         this.orderStatus = OrderStatus.TIMEOUT;
-    }
-    public void fail(){
-        if(this.orderStatus != OrderStatus.AWAITING_PAYMENT){
-            throw new IllegalStateException(
-                    "Only AWAITING_PAYMENT orders can be failed"
-            );
-        }
-        this.orderStatus = OrderStatus.FAILED;
     }
 }
