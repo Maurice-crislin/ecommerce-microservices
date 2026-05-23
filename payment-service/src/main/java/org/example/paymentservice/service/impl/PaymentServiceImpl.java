@@ -24,4 +24,9 @@ public class PaymentServiceImpl implements PaymentService {
             return paymentBaseService.findExistingPayment(request.getOrderId());
         }
     }
+
+    @Override
+    public Payment queryPaymentByOrderId(Long orderId) {
+        return paymentBaseService.findExistingPayment(orderId);
+    }
 }

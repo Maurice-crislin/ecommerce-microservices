@@ -31,6 +31,22 @@ public class PaymentController {
             return ResponseEntity.badRequest().body(new PaymentResponse(payment.getPaymentNo(), PaymentStatus.FAILED, "Payment failed"));
         }
     }
+
+    /**
+     * 只读查询指定订单的支付状态（不触发支付流程）
+     * 用于 PayingOrderRecoveryService 补偿查询、幂等校验等场景
+     */
+    @GetMapping("/order/{orderId}")
+    public ResponseEntity<PaymentResponse> queryPaymentByOrderId(@PathVariable Long orderId) {
+        try {
+            Payment payment = paymentService.queryPaymentByOrderId(orderId);
+            return ResponseEntity.ok(new PaymentResponse(payment.getPaymentNo(), payment.getStatus(), "ok"));
+        } catch (IllegalArgumentException e) {
+            // 没有支付记录是正常情况（例如订单还未发起支付），返回空结果
+            return ResponseEntity.ok(new PaymentResponse(null, null, "No payment record found for order: " + orderId));
+        }
+    }
+
     // GET /payment/refund/{paymentNo}
     @GetMapping("/refund/{paymentNo}")
     public ResponseEntity<RefundResponse> refund(@PathVariable String paymentNo){
