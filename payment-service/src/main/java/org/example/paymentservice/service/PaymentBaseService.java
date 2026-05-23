@@ -22,12 +22,11 @@ public class PaymentBaseService {
      */
     @Transactional
     public Payment doCreatePayment(PaymentRequest request) {
-        // 1. 创建初始状态为 PROCESSING 的支付记录
+        // 1. 创建初始状态为 Pending 的支付记录
         Payment payment = new Payment();
         payment.setOrderId(request.getOrderId());
         payment.setPaymentNo(UUID.randomUUID().toString());
         payment.setAmount(request.getAmount());
-        payment.setStatus(PaymentStatus.PROCESSING);
         payment.setProvider("SIMULATED");
 
         paymentRepository.saveAndFlush(payment);
