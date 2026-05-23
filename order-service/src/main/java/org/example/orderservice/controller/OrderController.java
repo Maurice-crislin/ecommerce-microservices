@@ -38,8 +38,8 @@ public class OrderController {
         try {
             orderService.payOrder(orderId);
             return ResponseEntity.ok(new SimpleResponse<>(true, "Payment processed successfully"));
-        } catch (RetryLaterException e) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+        } catch (RetryLaterException e) { // 可重试异常（并发支付中、payment service临时问题等）
+            return ResponseEntity.status(HttpStatus.CONFLICT)
                     .header("Retry-After", "2")
                     .body(new SimpleResponse<>(false, e.getMessage()));
         } catch (IllegalStateException |IllegalArgumentException e) {

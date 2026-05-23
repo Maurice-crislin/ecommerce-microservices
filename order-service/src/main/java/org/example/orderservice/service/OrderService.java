@@ -1,6 +1,8 @@
 package org.example.orderservice.service;
 
+import org.common.payment.enums.PaymentStatus;
 import org.example.orderservice.dto.OrderRequest;
+import org.example.orderservice.entity.Order;
 
 public interface OrderService  {
 //    Order → Product（批量查价）	REST API	强一致、立即需要结果
@@ -10,4 +12,6 @@ public interface OrderService  {
 //    Order → Inventory（确认/释放库存）	MQ	Saga 补偿、最终一致
     void createOrder(OrderRequest request);
     void payOrder(Long orderId);
+    Order markPaying(Long orderId);
+    void finalizeOrderAfterPayment(PaymentStatus paymentStatus, Long orderId);
 }
