@@ -22,8 +22,9 @@ public class OrderController {
             orderService.createOrder(request);
             return ResponseEntity.status(HttpStatus.CREATED)
                     .body(new SimpleResponse<>(true, "Order created successfully"));
-        } catch (RetryLaterException e) { // 需要客户端退避重试
+        } catch (RetryLaterException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .header("Retry-After", "2")
                     .body(new SimpleResponse<>(false, e.getMessage()));
         } catch (IllegalStateException | IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -36,8 +37,12 @@ public class OrderController {
     public ResponseEntity<SimpleResponse<Void>> payOrder(@PathVariable Long orderId) {
         try {
             orderService.payOrder(orderId);
-            return ResponseEntity.ok(new SimpleResponse<>(true, "Payment initiated successfully"));
-        } catch (IllegalStateException e) {
+            return ResponseEntity.ok(new SimpleResponse<>(true, "Payment processed successfully"));
+        } catch (RetryLaterException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", "2")
+                    .body(new SimpleResponse<>(false, e.getMessage()));
+        } catch (IllegalStateException |IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(new SimpleResponse<>(false, e.getMessage()));
         }
