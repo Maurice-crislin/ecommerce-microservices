@@ -73,7 +73,7 @@ public class OutboxEvent {
         // sending
         this.retryCount++;
         if(this.retryCount > 5) {
-            this.status = OutboxStatus.FAILED_FINAL;;
+            this.status = OutboxStatus.FAILED_FINAL;
         } else {
             // sending->new, reset for next time claim
             this.status = OutboxStatus.NEW;
