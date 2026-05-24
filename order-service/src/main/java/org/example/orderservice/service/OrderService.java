@@ -11,9 +11,6 @@ import org.example.orderservice.entity.Order;
 //    Order <- Payment（结果返回）	REST API
 //    Order → Inventory（确认/释放库存）	MQ	Saga 补偿、最终一致
 public interface OrderService  {
-    String toJsonStr(InventoryBatchRequest inventoryBatchRequest);
     void createOrder(OrderRequest request);
     void payOrder(Long orderId);
-    Order markPaying(Long orderId);
-    void finalizeOrderAfterPayment(PaymentStatus paymentStatus, Long orderId);
 }

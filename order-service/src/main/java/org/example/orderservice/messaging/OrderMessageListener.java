@@ -12,6 +12,7 @@ import org.example.orderservice.entity.Order;
 import org.example.orderservice.entity.OrderItem;
 import org.common.order.enums.OrderStatus;
 import org.example.orderservice.entity.OutboxEvent;
+import org.example.orderservice.service.OrderBaseService;
 import org.example.orderservice.service.OrderService;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -31,6 +32,7 @@ public class OrderMessageListener {
     private final OrderRepository orderRepository;
     private final OrderService orderService;
     private final OutboxEventRepo outboxEventRepo;
+    private final OrderBaseService orderBaseService;
 
     @RabbitListener(queues = RabbitMQConfig.ORDER_RELEASE_QUEUE)
     @Transactional
@@ -57,7 +59,7 @@ public class OrderMessageListener {
             try {
                 OutboxEvent outboxEvent = new OutboxEvent();
                 outboxEvent.setOrderId(orderId);
-                String payload = orderService.toJsonStr(new InventoryBatchRequest(orderId, stockRequests));
+                String payload = orderBaseService.toJsonStr(new InventoryBatchRequest(orderId, stockRequests));
                 outboxEvent.setPayload(payload);
                 outboxEvent.setEventType(OutBoxEventType.UNLOCK);
                 outboxEventRepo.save(outboxEvent);
