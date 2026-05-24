@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface OutboxEventRepo extends JpaRepository<OutboxEvent, Long> {
@@ -15,10 +16,17 @@ public interface OutboxEventRepo extends JpaRepository<OutboxEvent, Long> {
     @Modifying
     @Query("""
         UPDATE OutboxEvent e
-        SET e.status = 'SENDING'
+        SET e.status = 'SENDING',
+            e.claimedAt = CURRENT_TIMESTAMP
         WHERE e.id = :id
-        AND e.status = 'NEW'
-    """)
-    int claimEvent(@Param("id")  Long id);
+        AND (
+            e.status = 'NEW'
+            OR (
+                e.status = 'SENDING'
+                AND e.claimedAt < :timeout
+            )
+        )
+    """) // 5分钟前 claim 的 SENDING 认为已经死亡,允许重新接管。
+    int claimEvent(@Param("id")  Long id, @Param("timeout") LocalDateTime timeout);
 }
 

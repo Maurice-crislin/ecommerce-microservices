@@ -12,7 +12,6 @@ import java.time.LocalDateTime;
 @Entity
 @Getter
 @Setter
-@NoArgsConstructor
 @Table(name="outbox_event",uniqueConstraints = @UniqueConstraint(columnNames = {"order_id", "event_type"}))
 public class OutboxEvent {
     @Id
@@ -42,18 +41,17 @@ public class OutboxEvent {
 
     private LocalDateTime sentAt;
 
+    // claim out time recovery
+    private LocalDateTime claimedAt;
 
-    @PrePersist
-    public void prePersist() {
+    public OutboxEvent(){
         this.createdAt = LocalDateTime.now();
-
-        if (this.status == null) {
-            this.status = OutboxStatus.NEW;
-        }
     }
+
     public void markAsSent() {
         if (this.status == OutboxStatus.SENDING) {
             this.sentAt = LocalDateTime.now();
+            this.claimedAt = null;
             this.status = OutboxStatus.SENT;
         } else {
             throw new IllegalStateException("Cannot mark as sent");

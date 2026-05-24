@@ -11,6 +11,9 @@ import org.example.orderservice.messaging.InventoryEventProducer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -19,10 +22,15 @@ public class OutboxProcessorService {
     private final OutboxEventRepo outboxEventRepo;
     private final InventoryEventProducer inventoryEventProducer;
     private final ObjectMapper objectMapper;
+    private static final Duration CLAIM_TIMEOUT =
+            Duration.ofMinutes(5);
 
     @Transactional
     public void processOutboxEvent(Long id){
-        int claim = outboxEventRepo.claimEvent(id);
+
+        LocalDateTime timeout = LocalDateTime.now().minus(CLAIM_TIMEOUT);
+
+        int claim = outboxEventRepo.claimEvent(id,timeout);
         if (claim == 0) {
             // 未抢占到
             return;
