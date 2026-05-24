@@ -17,11 +17,11 @@ public class OutboxEvent {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    @Column(name = "event_type", nullable = false)
     @Enumerated(EnumType.STRING)
     private OutBoxEventType eventType; // mq消息是什么事件
 
-    @Column(nullable = false)
+    @Column(name = "order_id",nullable = false)
     private Long orderId;   // 聚合根ID，用于日志和监控
 
     @Lob
