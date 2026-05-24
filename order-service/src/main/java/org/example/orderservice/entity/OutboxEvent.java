@@ -52,7 +52,7 @@ public class OutboxEvent {
         }
     }
     public void markAsSent() {
-        if (this.status == OutboxStatus.NEW) {
+        if (this.status == OutboxStatus.SENDING) {
             this.sentAt = LocalDateTime.now();
             this.status = OutboxStatus.SENT;
         } else {
@@ -68,13 +68,19 @@ public class OutboxEvent {
         if (this.status == OutboxStatus.FAILED_FINAL){
             throw new IllegalStateException("Failed yet");
         }
+        if (this.status == OutboxStatus.NEW) {
+            throw new IllegalStateException("Event should be claimed");
+        }
 
-        // new
+        // sending
         this.retryCount++;
         if(this.retryCount > 5) {
             this.status = OutboxStatus.FAILED_FINAL;;
+        } else {
+            // sending->new, reset for next time claim
+            this.status = OutboxStatus.NEW;
         }
-        // 在retry次数之内的,还是new
+
     }
 
 }
