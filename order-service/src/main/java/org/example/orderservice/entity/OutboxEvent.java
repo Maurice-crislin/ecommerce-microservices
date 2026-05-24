@@ -2,7 +2,6 @@ package org.example.orderservice.entity;
 
 import jakarta.persistence.*;
 import lombok.Getter;
-import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.common.order.enums.OutBoxEventType;
 import org.common.order.enums.OutboxStatus;
