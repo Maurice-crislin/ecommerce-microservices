@@ -56,7 +56,6 @@ public class OrderServiceImpl implements OrderService {
     private final IdGenerator idGenerator;
     private final OrderRepository orderRepository;
     private final OrderMessageProducer orderMessageProducer;
-    private final InventoryEventProducer inventoryEventProducer;
 
     private final RedisTemplate<String, IdempotencyRecord> redisTemplate;
 
