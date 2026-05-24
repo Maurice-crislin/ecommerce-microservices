@@ -35,6 +35,9 @@ public class OutboxEvent {
     private OutboxStatus status = OutboxStatus.NEW;
 
     @Column(nullable = false)
+    private Integer retryCount = 0;
+
+    @Column(nullable = false)
     private LocalDateTime createdAt;
 
     private LocalDateTime sentAt;
@@ -57,12 +60,21 @@ public class OutboxEvent {
         }
     }
 
-    public void markAsFailed() {
-        if (this.status == OutboxStatus.NEW) {
-            this.status = OutboxStatus.FAILED;
-        }  else {
+    public void recordDispatchFailure(){
+
+        if (this.status == OutboxStatus.SENT) {
             throw new IllegalStateException("Cannot mark as failed");
         }
+        if (this.status == OutboxStatus.FAILED_FINAL){
+            throw new IllegalStateException("Failed yet");
+        }
+
+        // new
+        this.retryCount++;
+        if(this.retryCount > 5) {
+            this.status = OutboxStatus.FAILED_FINAL;;
+        }
+        // 在retry次数之内的,还是new
     }
 
 }
