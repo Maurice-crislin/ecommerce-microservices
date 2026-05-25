@@ -72,7 +72,7 @@ public class Order {
     public void lockPaying(){
         if (this.orderStatus != OrderStatus.AWAITING_PAYMENT) {
             throw new IllegalStateException(
-                    "Only AWAITING_PAYMENT orders can be lock"
+                    "Only AWAITING_PAYMENT orders can be locked"
             );
         }
         this.orderStatus = OrderStatus.PAYING;
@@ -89,7 +89,7 @@ public class Order {
     public void fail(){
         if(this.orderStatus != OrderStatus.PAYING){
             throw new IllegalStateException(
-                    "Only Paying orders can be failed"
+                    "Only PAYING orders can be failed"
             );
         }
         this.orderStatus = OrderStatus.FAILED;
