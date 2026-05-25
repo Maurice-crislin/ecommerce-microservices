@@ -1,14 +1,11 @@
 package org.example.orderservice.service.impl;
 
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.common.inventory.dto.InventoryBatchRequest;
 import org.common.inventory.dto.StockRequest;
 import org.common.order.enums.OrderIdeStatus;
-import org.common.order.enums.OutBoxEventType;
 import org.common.payment.dto.PaymentRequest;
 import org.common.payment.enums.PaymentStatus;
 import org.common.payment.dto.PaymentResponse;
@@ -16,7 +13,6 @@ import org.common.product.dto.BatchProductPriceRequest;
 import org.common.product.dto.BatchProductPriceResponse;
 import org.common.product.dto.ProductPriceResponse;
 import org.example.orderservice.OrderRepository.OrderRepository;
-import org.example.orderservice.OrderRepository.OutboxEventRepo;
 import org.example.orderservice.client.InventoryClient;
 import org.example.orderservice.client.PaymentClient;
 import org.example.orderservice.client.ProductClient;
@@ -24,14 +20,11 @@ import org.example.orderservice.dto.*;
 import org.example.orderservice.entity.Order;
 import org.common.order.enums.OrderStatus;
 import org.example.orderservice.entity.OrderItem;
-import org.example.orderservice.entity.OutboxEvent;
 import org.example.orderservice.exception.RetryLaterException;
-import org.example.orderservice.messaging.InventoryEventProducer;
 import org.example.orderservice.messaging.OrderMessageProducer;
 import org.example.orderservice.service.OrderBaseService;
 import org.example.orderservice.service.OrderService;
 import org.example.orderservice.utils.IdGenerator;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -71,7 +64,6 @@ public class OrderServiceImpl implements OrderService {
     }
 
 
-
     @Override
     @Transactional
     public void createOrder(OrderRequest request) {
@@ -96,14 +88,18 @@ public class OrderServiceImpl implements OrderService {
                 case SUCCESS:
                     return; // 幂等成功
                 case FAILED_RETRY:
+                    // 从幂等记录获得固定的orderid,继续真实执行逻辑去retry
+                    // 上一次失败,记录回滚,所以db里面没有对应order的
                     orderId = ideRecord.getOrderId();
                     break;
                 case PROCESSING:
                     orderId = ideRecord.getOrderId();
+                    // 如果redis没有,但是db有,以db作为权威
                     if (orderRepository.existsByIdempotencyKey(idempotencyKey)) {
                         this.setKV(REDIS_IDE_KEY, orderId, OrderIdeStatus.SUCCESS, Duration.ofHours(24));
                         return; // 幂等成功
                     } else {
+                        // db也没有,代表有成功线程在工作中,当前请求请等待重试
                         this.setKV(REDIS_IDE_KEY, orderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
                         throw new RetryLaterException("Request is being processed, please retry later");
                     }
@@ -136,14 +132,14 @@ public class OrderServiceImpl implements OrderService {
                 }
         );
 
-        List<org.common.inventory.dto.StockRequest> stockRequestList = request.getProductRequests();
+        List<StockRequest> stockRequestList = request.getProductRequests();
         String userId = request.getUserId();
         Order order = new Order(currentOrderId, userId);
         order.setIdempotencyKey(idempotencyKey);
         order.setOrderStatus(OrderStatus.AWAITING_PAYMENT);
         order.setTotalAmount(BigDecimal.ZERO);
 
-        // 0.保存占位订单一定要早,看会不会触发唯一约束错误
+        // 0. 保存占位订单一定要早,看会不会触发唯一约束错误
         try {
             order = orderRepository.saveAndFlush(order);
         } catch (DuplicateKeyException e) {
@@ -154,46 +150,78 @@ public class OrderServiceImpl implements OrderService {
             return;
         }
 
-        // 1.batch check price and valid
-        List<Long> productCodes = request.getProductRequests().stream().map(StockRequest::getProductCode).toList();
-        BatchProductPriceResponse batchProductPriceResponse = productClient.getBatchPrice(new BatchProductPriceRequest(productCodes));
+        // 1. 批量查价 + 校验: 所有产品是否可下单
+        List<Long> productCodes = stockRequestList.stream().map(StockRequest::getProductCode).toList();
+        BatchProductPriceResponse priceResponse = productClient.getBatchPrice(new BatchProductPriceRequest(productCodes));
 
-        if (!batchProductPriceResponse.isAllProductsOrderable()) {
+        if (!priceResponse.isAllProductsOrderable()) {
             this.setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.FAILED_FINAL, Duration.ofHours(24));
             throw new IllegalStateException("Some products are not orderable");
         }
 
-        // 2. lock inventory and check lock result
+        // 2. 批量预占库存
         InventoryBatchRequest batchLockRequest = new InventoryBatchRequest(currentOrderId, stockRequestList);
+        invokeLockInventory(batchLockRequest, currentOrderId, REDIS_IDE_KEY);
 
-        SimpleResponse lockResponse;
+        // 3. 构建订单明细 + 计算总价 (只依赖查价结果, 不依赖锁库存, 但因业务校验前置放锁库之后)
+        Order finalOrder = buildOrderFromPriceResponse(order, priceResponse, stockRequestList);
+        orderRepository.save(finalOrder);
+    }
+
+    // ==================== 私有方法 ====================
+
+    private void invokeLockInventory(InventoryBatchRequest lockRequest, Long orderId, String redisIdeKey) {
         try {
-            lockResponse = inventoryClient.batchLockInventory(batchLockRequest);
+            // 200 409 400 500
+            // 只看状态码 返回没有意义
+            inventoryClient.batchLockInventory(lockRequest);
         } catch (WebClientResponseException e) {
-            if (e.getStatusCode().is5xxServerError()) {
-                setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
-                throw new RetryLaterException("Inventory service temporary error" + e.getMessage());
+            int statusCode = e.getStatusCode().value();
+
+            if (statusCode == 409 ) {
+                // 409: 并发冲突 / 处理中 -> 标记可重试
+                setKV(redisIdeKey, orderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
+                throw new RetryLaterException("Inventory service temporary error(409)" + e.getMessage());
+            } if (statusCode == 500) {
+                // 500: 服务端代码崩溃 / 数据库断开 -> 标记可重试
+                setKV(redisIdeKey, orderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
+                throw new RetryLaterException("Inventory server error (500), will retry later.");
+            } if (e.getStatusCode().is4xxClientError()) {
+                // 400 或其他 4xx: 参数错误 / 状态不合法 -> 终态失败，绝不重试
+                setKV(redisIdeKey, orderId, OrderIdeStatus.FAILED_FINAL, Duration.ofHours(24));
+                throw new IllegalStateException("Inventory client error(4xx): " + e.getMessage());
             } else {
-                setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.FAILED_FINAL, Duration.ofHours(24));
-                throw new IllegalStateException("Inventory client error: " + e.getMessage());
+                // 其他未知的 HTTP 状态码，保守起见视作终态失败
+                setKV(redisIdeKey, orderId, OrderIdeStatus.FAILED_FINAL, Duration.ofHours(24));
+                throw new IllegalStateException("Unexpected HTTP status: " + statusCode);
             }
         } catch (Exception e) {
-            setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
+            // 网络超时（Timeout）、连接拒绝（ConnectException）、服务彻底宕机等
+            // 属于基础设施层面的临时不可用 -> 标记可重试
+            setKV(redisIdeKey, orderId, OrderIdeStatus.FAILED_RETRY, Duration.ofMinutes(30));
             throw new RetryLaterException("Inventory service unavailable" + e.getMessage());
         }
-        if (!lockResponse.isSuccess()) {
-            this.setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.FAILED_FINAL, Duration.ofHours(24));
-            throw new IllegalStateException(lockResponse.getMessage());
-        }
+    }
 
-        // 3. make price map
-        List<ProductPriceResponse> products = batchProductPriceResponse.getProducts();
-        Map<Long, BigDecimal> priceMap = products.stream()
+    private Order buildOrderFromPriceResponse(Order order, BatchProductPriceResponse priceResponse,
+                                               List<StockRequest> stockRequests) {
+        Map<Long, BigDecimal> priceMap = buildPriceMap(priceResponse.getProducts());
+        List<OrderItem> orderItems = buildOrderItems(stockRequests, priceMap);
+        BigDecimal totalPrice = calculateTotal(stockRequests, priceMap);
+
+        order.setOrderItems(orderItems);
+        order.setTotalAmount(totalPrice);
+        return order;
+    }
+
+    private Map<Long, BigDecimal> buildPriceMap(List<ProductPriceResponse> products) {
+        return products.stream()
                 .filter(p -> p.getPrice() != null)
                 .collect(Collectors.toMap(ProductPriceResponse::getProductCode, ProductPriceResponse::getPrice));
+    }
 
-        // 4. create order items
-        List<OrderItem> orderItems = stockRequestList.stream().map(stockRequest -> {
+    private List<OrderItem> buildOrderItems(List<StockRequest> stockRequests, Map<Long, BigDecimal> priceMap) {
+        return stockRequests.stream().map(stockRequest -> {
             BigDecimal unitPrice = priceMap.get(stockRequest.getProductCode());
             if (unitPrice == null) {
                 throw new IllegalStateException("Price not found for product: " + stockRequest.getProductCode());
@@ -204,21 +232,16 @@ public class OrderServiceImpl implements OrderService {
             item.setUnitPrice(unitPrice);
             return item;
         }).toList();
+    }
 
-        order.setOrderItems(orderItems);
-
-        // 5.calculate price
-        BigDecimal totalPrice = stockRequestList.stream()
+    private BigDecimal calculateTotal(List<StockRequest> stockRequests, Map<Long, BigDecimal> priceMap) {
+        return stockRequests.stream()
                 .map(stockRequest -> {
                     BigDecimal unitPrice = priceMap.get(stockRequest.getProductCode());
                     return unitPrice.multiply(BigDecimal.valueOf(stockRequest.getQuantity()));
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        order.setTotalAmount(totalPrice);
-        order.setOrderStatus(OrderStatus.AWAITING_PAYMENT);
     }
-
 
 
     @Override
