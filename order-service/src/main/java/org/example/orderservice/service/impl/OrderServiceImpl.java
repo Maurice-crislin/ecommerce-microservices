@@ -147,6 +147,9 @@ public class OrderServiceImpl implements OrderService {
         try {
             order = orderRepository.saveAndFlush(order);
         } catch (DuplicateKeyException e) {
+            // 幂等键已存在, 说明其他请求已创建订单, 当前事务回滚。
+            // Redis 中已有 (currentOrderId, PROCESSING) 记录, 直接置为 SUCCESS 完成幂等,
+            // 无需查 DB (createOrder 返回空 body, 客户端不依赖此 orderId)。
             this.setKV(REDIS_IDE_KEY, currentOrderId, OrderIdeStatus.SUCCESS, Duration.ofHours(24));
             return;
         }
