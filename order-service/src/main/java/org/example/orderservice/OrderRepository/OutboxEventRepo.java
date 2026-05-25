@@ -13,6 +13,14 @@ import java.util.List;
 public interface OutboxEventRepo extends JpaRepository<OutboxEvent, Long> {
     List<OutboxEvent> findAllByStatus(OutboxStatus status);
 
+    @Query("""
+        SELECT e FROM OutboxEvent e
+        WHERE e.status = 'NEW'
+        OR (e.status = 'SENDING' AND e.claimedAt < :timeout)
+        ORDER BY e.createdAt ASC
+    """)
+    List<OutboxEvent> findAllNewAndExpiredSending(@Param("timeout") LocalDateTime timeout);
+
     @Modifying
     @Query("""
         UPDATE OutboxEvent e
